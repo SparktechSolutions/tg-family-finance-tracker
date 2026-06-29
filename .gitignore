@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+.venv-connector/
+venv/
+env/
+
+# Secrets & local config
+.env
+
+# Databases
+*.db
+*.db-journal
+*.sqlite3
+
+# Test / tooling caches
+.pytest_cache/
+pytest-cache-files-*/
+.DS_Store
+run-artifacts/

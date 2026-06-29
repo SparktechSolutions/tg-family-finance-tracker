@@ -1,0 +1,8 @@
+# The connector is a SEPARATE process from the FastAPI webhook app and does NOT use
+# FastAPI. Install it in its OWN virtualenv to avoid a starlette version clash between
+# `mcp` and `fastapi`. The connector only needs the app's core (parser/crud/reports/models).
+mcp>=1.2.0
+SQLAlchemy>=2.0
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv>=1.0
