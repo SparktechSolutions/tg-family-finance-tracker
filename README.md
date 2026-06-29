@@ -1,91 +1,110 @@
-# TG Family Finance Tracker
+# 💰 TG Family Finance Tracker
 
-Track your family's money from a WhatsApp group. A bot reads the messages via the
-WhatsApp Cloud API and structures everything: **expenses, income, bank & credit-card
-accounts, investments, and insurance** — with a combined household net worth and a web
-dashboard.
+**A free, private family finance tracker you run yourself — log money by chatting in a Telegram group, and see it all on a beautiful dashboard.**
+
+[![CI](https://github.com/YOUR_USERNAME/tg-family-finance-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/tg-family-finance-tracker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-135%20passing-brightgreen.svg)](docs/TESTING.md)
+
+> Your family already has a group chat. Add a friendly bot to it, type things like
+> `Lunch 250 #food`, and the bot keeps the books — expenses, income, accounts, loans,
+> budgets, investments and more — with a polished web dashboard for the whole household.
 
 ```
-You (in group):  Lunch 250 #food >hdfc
-Bot:             ✅ Logged INR 250.00 · Food · Lunch · from HDFC ****1234
+You (in the Telegram group):   Lunch 250 #food >hdfc
+Bot:                           ✅ Logged INR 250.00 · Food · Lunch · from HDFC ****1234
 ```
 
-When the bot joins the group it welcomes everyone; each member sends `/start` and is
-walked through their name and accounts (only the bank name + last 4 digits are stored).
+---
 
-## Documentation
+## ✨ Why you'll like it
 
-| Doc | What's in it |
-|---|---|
-| [docs/TELEGRAM.md](docs/TELEGRAM.md) | **Free** Telegram setup (no Meta, real-time, no hosting) |
-| [docs/USER_MANUAL.md](docs/USER_MANUAL.md) | Complete end-user manual (onboarding, recipes, FAQ) |
-| [docs/INSTALLATION.md](docs/INSTALLATION.md) | Install, env config, running, ngrok + Meta webhook setup, deployment |
-| [docs/USAGE.md](docs/USAGE.md) | Onboarding walkthrough, full message + command reference, dashboard, API reference |
-| [docs/TECH.md](docs/TECH.md) | Tech stack, module map, data model, dispatch flow, design decisions |
-| [docs/SYNC.md](docs/SYNC.md) | Offline behaviour, idempotency, chat-export backfill, and refunds |
-| [docs/TESTING.md](docs/TESTING.md) | Test suite layout and how to run/extend it |
-| [docs/architecture.md](docs/architecture.md) | Complete architecture & technical reference |
-| [CLAUDE.md](CLAUDE.md) | Orientation for working in the codebase |
+- **🆓 Free & private** — you run it on your own computer. Your money data never leaves your machine. No subscriptions, no ads, no third party.
+- **💬 Dead simple to use** — the family just types in a normal Telegram group. No app to install on anyone's phone.
+- **🔒 Family-only** — the bot only listens to your group and ignores everyone else.
+- **📊 A real dashboard** — net worth, balances, budgets, charts, due-date reminders — filterable by week / month / quarter / year / custom range, with opening & closing balances.
+- **🧰 Tracks everything** — expenses, income, bank & credit-card accounts, cash & assets, investments, insurance, loans (borrowed & lent), refunds, transfers, budgets, recurring bills.
 
-## Tech stack
+## 👨‍👩‍👧‍👦 Who is this for?
 
-Python 3.11+ · FastAPI · SQLAlchemy 2.0 · SQLite → PostgreSQL · httpx · Chart.js dashboard
-· pytest (60 tests). WhatsApp **Cloud API** with group messaging (official since May 2026).
+Families (or roommates, or anyone) who want a **shared money tracker** without paying for an app or handing their finances to a company. Each household runs **its own copy** with **its own Telegram bot** — so your setup and your data are completely yours.
 
-## Quick start
+---
 
-One command does everything (setup + tests + run):
+## 🚀 Get started
+
+**Not technical?** Follow the friendly step-by-step guide — it assumes no coding knowledge:
+👉 **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** (about 15 minutes).
+
+**Comfortable with a terminal?** One command sets everything up:
 
 ```bash
-./run.sh          # macOS/Linux/WSL/Git Bash
-.\run.ps1         # Windows PowerShell
+git clone https://github.com/YOUR_USERNAME/tg-family-finance-tracker.git
+cd tg-family-finance-tracker
+./run.sh                 # macOS / Linux / WSL / Git Bash   (Windows: .\run.ps1)
 ```
 
-Or manually:
+That installs everything, runs the tests, and starts the app at **http://localhost:8000**.
+It works fully in **dry-run mode with no Telegram setup** — so you can explore the dashboard
+immediately and connect the bot whenever you're ready.
+
+### Connect your own Telegram bot (free, ~5 min)
+
+Each family makes its **own** bot, so the token is private to you:
+
+1. In Telegram, message **[@BotFather](https://t.me/BotFather)** → `/newbot` → copy the token.
+2. In BotFather: `/setprivacy` → your bot → **Disable** (lets it read group messages).
+3. Put the token in your `.env`: `TELEGRAM_BOT_TOKEN=...`
+4. `./run.sh telegram`, add the bot to your family group, everyone sends `/start`.
+
+Full walkthrough with the family-only lockdown: **[docs/TELEGRAM.md](docs/TELEGRAM.md)**.
+
+---
+
+## 📚 Documentation
+
+| Guide | For | What's in it |
+|---|---|---|
+| [GETTING_STARTED.md](docs/GETTING_STARTED.md) | 🟢 Everyone | Plain-language setup from zero — install, bot, first expense |
+| [USER_MANUAL.md](docs/USER_MANUAL.md) | 🟢 Everyone | How to use it day to day (with examples and an FAQ) |
+| [TELEGRAM.md](docs/TELEGRAM.md) | 🟢 Everyone | Create the bot + make it family-only |
+| [INSTALLATION.md](docs/INSTALLATION.md) | 🟡 Setup | Detailed install, env vars, deployment |
+| [USAGE.md](docs/USAGE.md) | 🟡 Reference | Every command + the full HTTP API |
+| [architecture.md](docs/architecture.md) | 🔵 Developers | How it's built |
+| [SYNC.md](docs/SYNC.md) | 🔵 Developers | Offline behaviour & refunds |
+| [TESTING.md](docs/TESTING.md) | 🔵 Developers | The test suite |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 🔵 Developers | How to contribute |
+
+## 🧱 Tech stack
+
+Python 3.10+ · FastAPI · SQLAlchemy 2.0 · SQLite → PostgreSQL · Telegram Bot API (free,
+long-polling — no hosting needed) · vanilla-JS dashboard. **135 passing tests.** Also ships
+an optional WhatsApp Cloud API path and an MCP connector to drive it from Claude.
+
+## 🤝 Contributing
+
+Contributions are very welcome — bug fixes, new features, docs, translations. Start with
+**[CONTRIBUTING.md](CONTRIBUTING.md)** and the
+[good first issues](https://github.com/YOUR_USERNAME/tg-family-finance-tracker/issues).
+Please also read our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn app.main:app --reload
-pytest -q
+./run.sh test     # run the full test suite before opening a PR
 ```
 
-App runs at http://localhost:8000 (`/docs`, `/health`). It works in **dry-run** without
-WhatsApp credentials — outgoing replies are logged instead of sent — so you can develop
-the parser and persistence offline.
+## 🔐 Privacy & disclaimer
 
-## Message format
+- It's **self-hosted**: nothing is sent anywhere except between your machine and your own
+  Telegram bot. Keep your `.env` (which holds your bot token) private — it's gitignored.
+- The dashboard is **unauthenticated on localhost** — fine for home use; don't expose port
+  8000 to the open internet without adding authentication.
+- This tool **only records** your finances. It never moves money. It is **not** financial
+  advice. To report a security issue, see [SECURITY.md](SECURITY.md).
 
-```
-Expense:   <what> <amount> [#category] [@payer] [>account]
-           Lunch 250 #food >hdfc
-Onboard:   /start          (then: name, then "HDFC 1234" / "ICICI credit 5678", then done)
-Income:    /income 50000 salary >hdfc
-Invest:    /invest add mf 100000 Axis Bluechip
-           /invest update Axis Bluechip 125000   ·   /investments
-Insurance: /insurance add health 24000 2026-09-15 HDFC Ergo   ·   /due
-Reports:   /total · /total <category> · /month <name> · /split · /networth · /undo · /help
-```
+## 📄 License
 
-`>account` debits the named account on an expense and credits it on income, so each
-account shows a running balance. Accounts are matched by bank name or last-4 digits.
+[MIT](LICENSE) © 2026 Emmanuel Biju and contributors.
 
-## Connecting to WhatsApp
-
-1. Create a Meta for Developers app, add the WhatsApp product, get an access token + phone number id.
-2. Fill `.env`.
-3. Expose your local server: `ngrok http 8000`.
-4. In Meta, set the webhook callback to `https://<ngrok>/webhook` with your verify token;
-   subscribe to `messages` + the group webhook fields.
-5. Add the bot number to your group and obtain the group id via the Groups API.
-
-For full setup details (permanent tokens, deployment) see
-[docs/INSTALLATION.md](docs/INSTALLATION.md).
-
-## Status
-
-The full application — expenses, income, accounts, investments, insurance, interactive
-onboarding, dashboard, and JSON/CSV API — is implemented and covered by **60 passing
-tests**. Remaining production-hardening items (live group-payload verification, Postgres +
-Alembic, dashboard auth) are listed in [docs/TECH.md](docs/TECH.md) and **CLAUDE.md**.
+> 🔧 **After you create the GitHub repo:** replace `YOUR_USERNAME` in this README (badges
+> and links) with your GitHub username or organisation.

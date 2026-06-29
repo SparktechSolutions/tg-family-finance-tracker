@@ -7,6 +7,12 @@ module-level quick map see [TECH.md](TECH.md).
 
 ---
 
+## 0. Project model
+
+This is an **open-source, self-hosted** project (MIT licensed). Each family runs its own copy
+on its own machine and connects its **own** Telegram bot (the token lives in their `.env`),
+so data and configuration are entirely per-deployment. See `CONTRIBUTING.md` to contribute.
+
 ## 1. What it is
 
 A family logs money in a shared **WhatsApp group**; a bot reads the messages, structures

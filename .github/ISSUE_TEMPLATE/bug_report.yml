@@ -1,0 +1,53 @@
+name: 🐛 Bug report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report a bug! Please fill in what you can.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: When I send "..." in the group, the bot replies "..." but I expected "..."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Send '...'
+        2. Open the dashboard
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen?
+      multiple: true
+      options:
+        - Telegram bot
+        - Web dashboard
+        - Setup / installation
+        - Cowork connector
+        - Other
+  - type: input
+    id: version
+    attributes:
+      label: OS & Python version
+      placeholder: "macOS 14, Python 3.12"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste any error text from the terminal. Do NOT include your bot token or any secrets.
+      render: shell

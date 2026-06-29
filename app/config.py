@@ -13,6 +13,9 @@ class Settings(BaseSettings):
 
     # Telegram bot (free alternative to WhatsApp; from @BotFather)
     telegram_bot_token: str = ""
+    # Family-only allowlist: comma-separated Telegram chat IDs the bot responds in.
+    # Empty = open (anyone who finds the bot can use it). Set this to lock it down.
+    telegram_allowed_chat_ids: str = ""
 
     # App
     database_url: str = "sqlite:///./expenses.db"

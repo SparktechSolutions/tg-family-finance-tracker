@@ -1,5 +1,10 @@
 # User Manual
 
+> 🟢 **New here?** If you haven't set it up yet, start with the easy, no-jargon
+> **[Getting Started guide](GETTING_STARTED.md)** — it walks you through everything in
+> about 15 minutes. This manual is about *using* it day to day.
+
+
 A complete, friendly guide to using the **TG Family Finance Tracker** — for the
 person running it and for the family members typing in the group. For deeper API/command
 detail see [USAGE.md](USAGE.md); for setup see [INSTALLATION.md](INSTALLATION.md).
@@ -69,6 +74,14 @@ uber 120                         → ₹120, Transport (guessed from the word)
 - `#category` sets the category; otherwise it's guessed from keywords.
 - `@name` records who paid (defaults to you).
 - `>bank` (name or last-4) debits that account.
+
+**Set or update an account balance**
+```
+/account add HDFC 1234 50000          # add a bank account with a balance
+/account add ICICI credit 5678 12000  # add a credit card with amount owed
+/account balance HDFC 60000           # change it later
+```
+Bank balance = cash you have; credit-card balance = what you owe.
 
 **Record income**
 ```

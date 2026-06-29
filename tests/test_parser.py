@@ -25,7 +25,7 @@ def test_currency_symbol_and_thousands():
     p = parse_expense("₹1,500 groceries")
     assert p.amount == 1500
     assert p.currency == "INR"
-    assert p.category == "Food"
+    assert p.category == "Groceries"
 
 
 def test_payer_hint():

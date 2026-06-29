@@ -138,3 +138,7 @@ Messages can come from **WhatsApp** (`app/webhook.py`, Cloud API) or **Telegram*
 (`app/telegram_bot.py`, free long-polling — no Meta, no hosting). Both resolve a
 (group, member) and call the shared dispatcher `app/ingest.py:handle_text`. Telegram is the
 recommended free path — see `docs/TELEGRAM.md`. Run with `./run.sh telegram`.
+
+## Full-scale modules
+
+Beyond expenses/income/accounts/investments/insurance, the app now covers: refunds, self-transfers, loans (borrowed/lent), **budgets + alerts**, **recurring items + reminders** (Telegram posts due-soon nudges daily), **personal vs shared** expenses (settle-up uses shared only), cash/asset account types, a Fees category, and a richer category map. The web dashboard is a sidebar app (Overview/Accounts/Cards/Loans/Investments/Insurance/Budgets/Recurring/Expenses) with add/edit/delete and 15s auto-refresh. Schema upgrades are handled by `db._auto_migrate` (adds missing columns; replace with Alembic for production).

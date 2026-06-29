@@ -1,5 +1,10 @@
 # Installation Guide
 
+> 🟢 **Not a developer?** This page is the detailed reference. For a gentle,
+> step-by-step setup that assumes no coding knowledge, use
+> **[GETTING_STARTED.md](GETTING_STARTED.md)** instead.
+
+
 Get the TG Family Finance Tracker running on any local machine. The fastest path is
 the bundled CLI script; manual steps and the WhatsApp connection follow.
 
@@ -125,3 +130,17 @@ versions) and prints the MCP config block to paste into Claude/Cowork. Full guid
 - **Token:** permanent Meta system-user token; verify webhook signatures.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) §10–11 for the full deployment and security notes.
+
+## Troubleshooting
+
+- **"Python not found"** — install Python 3.10+ from python.org. On Windows, re-run the
+  installer and tick **"Add Python to PATH"**.
+- **"disk I/O error" (SQLite)** — you're likely running from a synced/cloud folder. Set an
+  absolute local path in `.env`, e.g. `DATABASE_URL=sqlite:////Users/you/tg-family-finance-tracker/expenses.db`.
+- **Bot doesn't react to plain messages** — in @BotFather run `/setprivacy` → your bot →
+  **Disable**, then re-add it to the group.
+- **Bot ignores everyone** — you set `TELEGRAM_ALLOWED_CHAT_IDS` to the wrong chat id. Check
+  the bot's terminal for the `chat_id=...` line and use that exact number.
+- **Dashboard shows nothing / old data** — make sure the bot and the dashboard use the same
+  `DATABASE_URL`, then hard-reload the page (Cmd/Ctrl+Shift+R).
+- **Port 8000 already in use** — start on another port: `PORT=8001 ./run.sh start`.

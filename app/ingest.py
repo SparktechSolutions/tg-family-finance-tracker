@@ -12,7 +12,7 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
-from . import commands, crud, onboarding
+from . import commands, crud, onboarding, reports
 from .models import Group, Member
 from .parser import is_command, is_refund, parse_expense
 
@@ -56,7 +56,7 @@ def handle_text(db: Session, group: Group, member: Member, text: str, *,
         db, group=group, member=payer, account=account, amount=parsed.amount,
         currency=parsed.currency or group.currency, category=parsed.category,
         note=parsed.note, spent_at=spent_on or date.today(),
-        raw_message=text, wa_message_id=message_id,
+        raw_message=text, wa_message_id=message_id, shared=parsed.shared,
     )
     if exp is None:
         return None  # duplicate delivery; already stored
@@ -64,4 +64,9 @@ def handle_text(db: Session, group: Group, member: Member, text: str, *,
     who = f" · paid by {payer.display_name}" if parsed.payer_hint and payer.display_name else ""
     note = f" · {parsed.note}" if parsed.note and parsed.note != parsed.category else ""
     acct = f" · from {account.bank_name} ****{account.last4}" if account else ""
-    return f"✅ Logged {exp.currency} {parsed.amount:,.2f} · {parsed.category}{note}{who}{acct}"
+    tag = " · personal" if not parsed.shared else ""
+    confirm = f"✅ Logged {exp.currency} {parsed.amount:,.2f} · {parsed.category}{note}{who}{acct}{tag}"
+    alert = reports.budget_alert_for(db, group, parsed.category, on=spent_on)
+    if alert:
+        confirm += f"\n{alert}"
+    return confirm

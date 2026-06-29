@@ -63,6 +63,33 @@ No ngrok, no webhook, no server needed.
 
 ---
 
+## Make it family-only (important)
+
+Telegram bots are **publicly reachable by their @username** — anyone who discovers it could
+message it or add it to their own group. Telegram has no built-in "invite-only" for bots,
+so the project enforces it **server-side with an allowlist**: the bot only responds in chat
+IDs you approve and silently ignores everyone else (their messages never touch your data).
+
+To lock it to your family group:
+
+1. Start the bot once with `TELEGRAM_ALLOWED_CHAT_IDS` empty and add it to your family
+   group (or message it). In the bot's console you'll see a line like:
+   `Telegram message in chat_id=-1001234567890`. That negative number is your group's
+   chat ID. (You can also add **@RawDataBot** to the group briefly to read the id.)
+2. Put it in `.env`:
+   `TELEGRAM_ALLOWED_CHAT_IDS=-1001234567890`
+   (Comma-separate multiple chats, e.g. group + your DM: `-1001234567890, 12345678`.)
+3. Restart the bot. On startup it prints `Locked to chat IDs: [...]`. Now only your family
+   group works; anyone else is ignored.
+
+Extra hardening (optional):
+- In **@BotFather -> /setjoingroups -> Disable** so the bot can't be added to new groups.
+- Don't share the bot's @username publicly; keep the bot token secret.
+
+> Until you set `TELEGRAM_ALLOWED_CHAT_IDS`, the bot logs a startup warning that it's open.
+> Data from different chats is always kept separate, but set the allowlist so only your
+> family can use your running bot at all.
+
 ## How it works
 
 - The bot long-polls Telegram's `getUpdates`. Each message maps to the same internal shape

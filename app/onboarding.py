@@ -24,9 +24,12 @@ FLOW = "onboarding"
 STEP_NAME = "awaiting_name"
 STEP_ACCOUNTS = "awaiting_accounts"
 
-# "HDFC 1234", "ICICI credit 5678", "Amex cc 9012"
+# "HDFC 1234", "ICICI credit 5678", "Amex cc 9012", and with an optional balance:
+# "HDFC 1234 50000"  (bank cash balance) / "ICICI credit 5678 12000" (amount owed on card)
 _ACCOUNT_LINE = re.compile(
-    r"^\s*([A-Za-z][\w &]*?)\s+(?:(credit|cc|card)\s+)?(\d{4})\s*$", re.IGNORECASE
+    r"^\s*([A-Za-z][\w &]*?)\s+(?:(credit|cc|card)\s+)?(\d{4})"
+    r"(?:\s+[₹$€£]?(\d[\d,]*(?:\.\d+)?))?\s*$",
+    re.IGNORECASE,
 )
 
 
@@ -73,7 +76,9 @@ def handle(db: Session, group: Group, member: Member, text: str) -> str:
             f"Nice to meet you, *{name}*! 🏦\n"
             "Now add your accounts, one per message, like:\n"
             "• `HDFC 1234`  (bank)\n"
+            "• `HDFC 1234 50000`  (bank + current balance)\n"
             "• `ICICI credit 5678`  (credit card)\n"
+            "• `ICICI credit 5678 12000`  (card + amount currently owed)\n"
             "You can add as many as you like. Type *done* when finished, or *skip*."
         )
 
@@ -99,14 +104,25 @@ def handle(db: Session, group: Group, member: Member, text: str) -> str:
 
         m = _ACCOUNT_LINE.match(text)
         if not m:
-            return ("I didn't catch that. Use `<Bank> <last4>` e.g. `HDFC 1234`, "
-                    "or `<Bank> credit <last4>` for a card. Type *done* when finished.")
-        bank, card_flag, last4 = m.group(1).strip(), m.group(2), m.group(3)
+            return ("I didn't catch that. Use `<Bank> <last4>` e.g. `HDFC 1234` "
+                    "(optionally a balance: `HDFC 1234 50000`), or `<Bank> credit <last4>` "
+                    "for a card. Type *done* when finished.")
+        bank, card_flag, last4, amt = (m.group(1).strip(), m.group(2), m.group(3), m.group(4))
         kind = "credit_card" if card_flag else "bank"
-        crud.add_account(db, group, member, bank_name=bank, last4=last4, kind=kind)
+        # Bank balance is cash (positive); a credit-card balance is money owed (negative).
+        opening = 0.0
+        if amt:
+            value = float(amt.replace(",", ""))
+            opening = -value if kind == "credit_card" else value
+        crud.add_account(db, group, member, bank_name=bank, last4=last4, kind=kind,
+                         opening_balance=opening)
         db.flush()
         label = "credit card" if kind == "credit_card" else "account"
-        return f"➕ Added {bank} ****{last4} ({label}). Add another, or type *done*."
+        bal = ""
+        if amt:
+            v = float(amt.replace(",", ""))
+            bal = f", owe {v:,.0f}" if kind == "credit_card" else f", balance {v:,.0f}"
+        return f"➕ Added {bank} ****{last4} ({label}{bal}). Add another, or type *done*."
 
     # Unknown step -> reset cleanly.
     _clear(db, state)

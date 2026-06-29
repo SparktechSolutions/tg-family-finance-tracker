@@ -22,6 +22,9 @@ HELP_TEXT = (
     "*Money & accounts:*\n"
     "• `/start` — set up your name + accounts\n"
     "• `/accounts` — list accounts & balances\n"
+    "• `/account add HDFC 1234 50000` — add an account with a balance\n"
+    "• `/account add ICICI credit 5678 12000` — add a card with amount owed\n"
+    "• `/account balance HDFC 60000` — set a balance (or a card's owed) anytime\n"
     "• `/income <amount> [source] [>account]` — e.g. `/income 50000 salary >hdfc`\n\n"
     "*Investments:*\n"
     "• `/invest add <kind> <amount> <name>` — e.g. `/invest add mf 100000 Axis Bluechip`\n"
@@ -30,6 +33,16 @@ HELP_TEXT = (
     "*Insurance:*\n"
     "• `/insurance add <kind> <premium> <YYYY-MM-DD> <name>`\n"
     "• `/due` — upcoming premiums\n\n"
+    "*Transfers & loans:*\n"
+    "• `/transfer <amount> <from> <to>` — move money between your accounts\n"
+    "• `/lend <amount> <friend> [>account]` — you lent money (they owe you)\n"
+    "• `/borrow <amount> <lender> [>account]` — you borrowed (you owe)\n"
+    "• `/loan pay <lender> <amount>` · `/loan collect <friend> <amount>` · `/loans`\n\n"
+    "*Budgets & recurring:*\n"
+    "• `/budget set <category> <amount>` · `/budget` — monthly limits + status\n"
+    "• `/recurring add expense 15000 1 Rent` — bills/EMIs/subscriptions (day of month)\n"
+    "• `/upcoming` — what's due soon\n\n"
+    "*Personal expense:* add `!personal` to keep it out of the split (e.g. `Spa 1500 !personal`)\n\n"
     "*Refund:* `/refund <amount> [#category] [>account]` — money back (nets spend, credits account)\n\n"
     "*Reports:* `/total` · `/total <category>` · `/month <name>` · "
     "`/split` · `/networth` · `/undo` · `/help`"
@@ -79,6 +92,18 @@ def handle(db: Session, group: Group, member: Member, text: str) -> str:
         return _refund(db, group, member, text, cur)
     if cmd == "accounts":
         return _accounts(db, group, cur)
+    if cmd == "account":
+        return _account(db, group, member, args, cur)
+    if cmd == "transfer":
+        return _transfer(db, group, member, args, text, cur)
+    if cmd in ("lend", "lent"):
+        return _loan_add(db, group, member, args, text, cur, "lent")
+    if cmd in ("borrow", "borrowed"):
+        return _loan_add(db, group, member, args, text, cur, "borrowed")
+    if cmd == "loan":
+        return _loan(db, group, member, args, text, cur)
+    if cmd == "loans":
+        return _loans(db, group, cur)
     if cmd == "income":
         return _income(db, group, member, args, text, cur)
     if cmd in ("invest", "investment", "investments"):
@@ -87,6 +112,12 @@ def handle(db: Session, group: Group, member: Member, text: str) -> str:
         return _insurance(db, group, member, args, cur)
     if cmd in ("due", "premiums"):
         return _due(db, group, cur)
+    if cmd in ("budget", "budgets"):
+        return _budget(db, group, args, cur)
+    if cmd in ("recurring", "recurrings"):
+        return _recurring(db, group, member, args, text, cur)
+    if cmd in ("upcoming", "reminders"):
+        return _upcoming(db, group, cur)
     if cmd in ("networth", "net", "worth"):
         return _networth(db, group, cur)
 
@@ -174,15 +205,179 @@ def record_refund(db, group, member, text: str, cur: str, wa_message_id: str) ->
 
 # --- accounts & income ---------------------------------------------------------
 
+def _balance_label(a, cur) -> str:
+    """Banks show their cash balance; credit cards show what's owed (negative balance)."""
+    if a["kind"] == "credit_card":
+        owed = -a["balance"] if a["balance"] < 0 else 0
+        return f"owe {_fmt(owed, cur)}" if owed else f"{_fmt(a['balance'], cur)} (in credit)"
+    return _fmt(a["balance"], cur)
+
+
 def _accounts(db, group, cur) -> str:
     rows = reports.accounts_overview(db, group)
     if not rows:
-        return "No accounts yet. Send /start to add yours."
+        return "No accounts yet. Send /start, or use /account add HDFC 1234 50000."
     lines = ["🏦 *Accounts*"]
     for a in rows:
         tag = " 💳" if a["kind"] == "credit_card" else ""
         owner = f" ({a['owner']})" if a["owner"] else ""
-        lines.append(f"• {a['bank_name']} ****{a['last4']}{tag}{owner}: {_fmt(a['balance'], cur)}")
+        lines.append(f"• {a['bank_name']} ****{a['last4']}{tag}{owner}: {_balance_label(a, cur)}")
+    return "\n".join(lines)
+
+
+def _account(db, group, member, args, cur) -> str:
+    """/account add <bank> [credit] <last4> [amount]  |  /account balance <bank|last4> <amount>"""
+    if not args:
+        return ("Usage:\n"
+                "• `/account add HDFC 1234 50000` — add a bank account with a balance\n"
+                "• `/account add ICICI credit 5678 12000` — add a card with amount owed\n"
+                "• `/account balance HDFC 60000` — set an account's current balance\n"
+                "• `/account balance ICICI 9000` — set a card's amount owed\n"
+                "• `/accounts` — list accounts & balances")
+    sub = args[0].lower()
+    rest = args[1:]
+
+    if sub == "add":
+        kind_words = {"credit": "credit_card", "cc": "credit_card", "card": "credit_card",
+                      "cash": "cash", "asset": "asset", "bank": "bank"}
+        kind = next((kind_words[t.lower()] for t in rest if t.lower() in kind_words), "bank")
+        rest_wo_kind = [t for t in rest if t.lower() not in kind_words]
+        # Only bank/credit accounts have a last-4; for cash/asset a 4-digit token is the amount.
+        last4 = None
+        if kind in ("bank", "credit_card"):
+            last4 = next((t for t in rest_wo_kind if re.fullmatch(r"\d{4}", t)), None)
+        amounts = [t for t in rest_wo_kind if _NUM_RE.match(t) and t != last4]
+        name_tokens = [t for t in rest_wo_kind if not _NUM_RE.match(t)]
+        # Cash / assets don't need a last-4.
+        if not name_tokens or (not last4 and kind in ("bank", "credit_card")):
+            return ("Usage: /account add <name> [credit|cash|asset] [last4] [amount]\n"
+                    "e.g. /account add HDFC 1234 50000 · /account add Wallet cash 2000 · "
+                    "/account add Gold asset 150000")
+        bank = " ".join(name_tokens)
+        opening = 0.0
+        if amounts:
+            v = _num(amounts[0])
+            opening = -v if kind == "credit_card" else v
+        crud.add_account(db, group, member, bank_name=bank, last4=last4 or "", kind=kind,
+                         opening_balance=opening)
+        label = "credit card" if kind == "credit_card" else "account"
+        extra = ""
+        if amounts:
+            v = _num(amounts[0])
+            extra = f" · owe {_fmt(v, cur)}" if kind == "credit_card" else f" · balance {_fmt(v, cur)}"
+        return f"➕ Added {bank} ****{last4} ({label}){extra}"
+
+    if sub in ("balance", "bal", "set"):
+        if len(rest) < 2 or not _NUM_RE.match(rest[-1]):
+            return "Usage: /account balance <bank or last4> <amount>  e.g. /account balance HDFC 60000"
+        token = " ".join(rest[:-1])
+        amount = _num(rest[-1])
+        acc = crud.find_account(db, group, token)
+        if acc is None:
+            return f"No account matching '{token}'. See /accounts."
+        target = -amount if acc.kind == "credit_card" else amount
+        crud.set_account_balance(db, acc, target)
+        if acc.kind == "credit_card":
+            return f"🟰 {acc.bank_name} ****{acc.last4}: now owe {_fmt(amount, cur)}"
+        return f"🟰 {acc.bank_name} ****{acc.last4}: balance set to {_fmt(amount, cur)}"
+
+    return "Usage: /account add … | /account balance … | /accounts"
+
+
+# --- transfers & loans --------------------------------------------------------
+
+def _acct_from_text(db, group, text):
+    m = re.search(r">(\w+)", text)
+    return crud.find_account(db, group, m.group(1)) if m else None
+
+
+def _transfer(db, group, member, args, text, cur) -> str:
+    # /transfer <amount> <from> <to>   (filler words from/to/-> are ignored)
+    toks = [t for t in args if t.lower() not in ("from", "to", "->", "→")]
+    nums = [t for t in toks if _NUM_RE.match(t)]
+    names = [t for t in toks if not _NUM_RE.match(t)]
+    if not nums or len(names) < 2:
+        return "Usage: /transfer <amount> <from account> <to account>  e.g. /transfer 5000 hdfc icici"
+    amount = _num(nums[0])
+    src = crud.find_account(db, group, names[0])
+    dst = crud.find_account(db, group, names[1])
+    if src is None or dst is None:
+        miss = names[0] if src is None else names[1]
+        return f"No account matching '{miss}'. See /accounts."
+    if src.id == dst.id:
+        return "Pick two different accounts to transfer between."
+    crud.create_transfer(db, group=group, member=member, from_account=src, to_account=dst,
+                         amount=amount, currency=cur, on=_today(),
+                         wa_message_id=f"cmd-xfer-{datetime.utcnow().timestamp()}")
+    return (f"🔁 Transferred {_fmt(amount, cur)}: {src.bank_name} ****{src.last4} → "
+            f"{dst.bank_name} ****{dst.last4}")
+
+
+def _loan_add(db, group, member, args, text, cur, direction) -> str:
+    if not args:
+        verb = "lend" if direction == "lent" else "borrow"
+        who = "friend" if direction == "lent" else "lender/bank"
+        return f"Usage: /{verb} <amount> <{who}> [>account]  e.g. /{verb} 5000 Raju >hdfc"
+    acct = _acct_from_text(db, group, text)
+    toks = [t for t in args if not t.startswith(">")]
+    nums = [t for t in toks if _NUM_RE.match(t)]
+    names = [t for t in toks if not _NUM_RE.match(t)]
+    if not nums or not names:
+        return "I need an amount and a name, e.g. /lend 5000 Raju >hdfc"
+    amount = _num(nums[0])
+    counterparty = " ".join(names)
+    crud.add_loan(db, group, member, direction=direction, counterparty=counterparty,
+                  principal=amount, on=_today(), account=acct)
+    where = f" from {acct.bank_name} ****{acct.last4}" if (acct and direction == "lent") else (
+        f" into {acct.bank_name} ****{acct.last4}" if acct else "")
+    if direction == "lent":
+        return f"🤝 Lent {_fmt(amount, cur)} to *{counterparty}*{where}. They owe you {_fmt(amount, cur)}."
+    return f"🏦 Borrowed {_fmt(amount, cur)} from *{counterparty}*{where}. You owe {_fmt(amount, cur)}."
+
+
+def _loan(db, group, member, args, text, cur) -> str:
+    if not args or args[0].lower() in ("list", "all"):
+        return _loans(db, group, cur)
+    sub = args[0].lower()
+    rest = [t for t in args[1:] if not t.startswith(">")]
+    if sub in ("pay", "collect", "repaid", "repay"):
+        nums = [t for t in rest if _NUM_RE.match(t)]
+        names = [t for t in rest if not _NUM_RE.match(t)]
+        if not nums or not names:
+            return ("Usage: /loan pay <lender> <amount> [>account]  (you repay a loan)\n"
+                    "       /loan collect <friend> <amount> [>account]  (friend repays you)")
+        amount = _num(nums[0])
+        counterparty = " ".join(names)
+        direction = "borrowed" if sub in ("pay", "repay") else "lent"
+        loan = crud.find_loan(db, group, counterparty, direction=direction)
+        if loan is None:
+            kind = "a loan you owe" if direction == "borrowed" else "money you lent"
+            return f"No record of {kind} with '{counterparty}'. See /loans."
+        acct = _acct_from_text(db, group, text)
+        crud.add_loan_payment(db, loan, amount=amount, on=_today(), account=acct)
+        left = reports.loan_outstanding(db, loan)
+        if direction == "borrowed":
+            return f"✅ Paid {_fmt(amount, cur)} to {counterparty}. You still owe {_fmt(left, cur)}."
+        return f"✅ {counterparty} repaid {_fmt(amount, cur)}. They still owe you {_fmt(left, cur)}."
+    return ("Usage:\n• `/lend <amount> <friend> [>account]`\n• `/borrow <amount> <lender> [>account]`\n"
+            "• `/loan pay <lender> <amount> [>account]`\n• `/loan collect <friend> <amount> [>account]`\n"
+            "• `/loans`")
+
+
+def _loans(db, group, cur) -> str:
+    rows = reports.loans_overview(db, group)
+    active = [r for r in rows if r["outstanding"] > 0.005]
+    if not active:
+        return "No outstanding loans. Add one: /lend 5000 Raju  or  /borrow 100000 SBI"
+    owe = [r for r in active if r["direction"] == "borrowed"]
+    owed = [r for r in active if r["direction"] == "lent"]
+    lines = ["💳 *Loans*"]
+    if owe:
+        lines.append("*You owe:*")
+        lines += [f"• {r['counterparty']}: {_fmt(r['outstanding'], cur)}" for r in owe]
+    if owed:
+        lines.append("*Owed to you:*")
+        lines += [f"• {r['counterparty']}: {_fmt(r['outstanding'], cur)}" for r in owed]
     return "\n".join(lines)
 
 
@@ -333,6 +528,87 @@ def _due(db, group, cur) -> str:
             due_s = " — no due date set"
         lines.append(f"• {r['name']} [{r['kind']}]{own}: {_fmt(r['premium'], cur)}/{r['frequency']}{due_s}")
     return "\n".join(lines)
+
+
+# --- budgets ------------------------------------------------------------------
+
+def _budget(db, group, args, cur) -> str:
+    if not args or args[0].lower() in ("list", "status"):
+        rows = reports.budget_status(db, group)
+        if not rows:
+            return "No budgets set. Try: /budget set Food 8000"
+        lines = ["📊 *Budgets (this month)*"]
+        for r in rows:
+            bar = "🔴" if r["spent"] > r["limit"] else ("🟠" if r["pct"] >= 80 else "🟢")
+            lines.append(f"{bar} {r['category']}: {_fmt(r['spent'], cur)} / {_fmt(r['limit'], cur)} "
+                         f"({r['pct']:.0f}%)")
+        return "\n".join(lines)
+    sub = args[0].lower()
+    if sub in ("set", "add"):
+        rest = args[1:]
+        nums = [t for t in rest if _NUM_RE.match(t)]
+        names = [t for t in rest if not _NUM_RE.match(t)]
+        if not nums or not names:
+            return "Usage: /budget set <category> <monthly amount>  e.g. /budget set Food 8000"
+        cat = " ".join(names).capitalize()
+        crud.set_budget(db, group, cat, _num(nums[0]))
+        return f"📊 Budget set: {cat} = {_fmt(_num(nums[0]), cur)}/month"
+    if sub in ("remove", "delete", "rm"):
+        cat = " ".join(args[1:]).strip()
+        return (f"🗑️ Removed budget for {cat}." if crud.delete_budget(db, group, cat)
+                else f"No budget for '{cat}'.")
+    return "Usage: /budget · /budget set <category> <amount> · /budget remove <category>"
+
+
+# --- recurring ----------------------------------------------------------------
+
+def _recurring(db, group, member, args, text, cur) -> str:
+    if not args or args[0].lower() in ("list", "all"):
+        return _upcoming(db, group, cur)
+    sub = args[0].lower()
+    if sub == "add":
+        rest = args[1:]
+        flow = "income" if any(t.lower() in ("income", "in", "salary") for t in rest) else "expense"
+        rest = [t for t in rest if t.lower() not in ("expense", "income", "in", "out")]
+        acct = _acct_from_text(db, group, text)
+        rest = [t for t in rest if not t.startswith(">")]
+        tag = next((t[1:] for t in rest if t.startswith("#")), None)
+        rest = [t for t in rest if not t.startswith("#")]
+        nums = [t for t in rest if _NUM_RE.match(t)]
+        names = [t for t in rest if not _NUM_RE.match(t)]
+        if len(nums) < 2 or not names:
+            return ("Usage: /recurring add <expense|income> <amount> <day 1-31> <label> [#category] [>account]\n"
+                    "e.g. /recurring add expense 15000 1 Rent  ·  /recurring add income 50000 1 Salary")
+        amount = _num(nums[0])
+        day = int(float(nums[1]))
+        label = " ".join(names)
+        category = (tag.capitalize() if tag else label.capitalize()) if flow == "expense" else None
+        r = crud.add_recurring(db, group, member, flow=flow, label=label, amount=amount,
+                               day_of_month=day, category=category, account=acct)
+        return (f"🔁 Recurring {flow} added: *{label}* {_fmt(amount, cur)} on day {r.day_of_month} "
+                f"of each month. I'll remind the group when it's due.")
+    if sub in ("remove", "delete", "rm"):
+        if not args[1:] or not args[1].isdigit():
+            return "Usage: /recurring remove <id>  (see ids in /recurring)"
+        ok = crud.delete_recurring(db, group, int(args[1]))
+        return "🗑️ Removed." if ok else "No such recurring item."
+    return "Usage: /recurring add … | /recurring remove <id> | /recurring"
+
+
+def _upcoming(db, group, cur) -> str:
+    rows = reports.recurring_overview(db, group)
+    rem = reports.reminders(db, group, within_days=3)
+    lines = []
+    if rows:
+        lines.append("🔁 *Recurring items*")
+        for r in rows:
+            tag = "💸" if r["flow"] == "expense" else "💚"
+            lines.append(f"{tag} [{r['id']}] {r['label']}: {_fmt(r['amount'], cur)} on day "
+                         f"{r['day_of_month']} — next {r['next_due']} (in {r['days_until']}d)")
+    if rem:
+        lines.append("\n⏰ *Due soon:*")
+        lines += rem
+    return "\n".join(lines) if lines else "No recurring items. Add: /recurring add expense 15000 1 Rent"
 
 
 # --- net worth -----------------------------------------------------------------

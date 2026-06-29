@@ -95,6 +95,7 @@ class Expense(Base):
     raw_message: Mapped[str] = mapped_column(Text)
     wa_message_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     is_refund: Mapped[bool] = mapped_column(Boolean, default=False)
+    shared: Mapped[bool] = mapped_column(Boolean, default=True)   # False = personal, no split
     original_expense_id: Mapped[int | None] = mapped_column(
         ForeignKey("expenses.id"), nullable=True
     )
@@ -194,3 +195,100 @@ class InboundEvent(Base):
     processed: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Transfer(Base):
+    """A self-transfer of money between two of your own accounts.
+
+    Moves cash from `from_account` to `to_account`; net worth is unchanged. Reflected in
+    each account's computed balance (out −, in +), without touching income/expense reports.
+    """
+    __tablename__ = "transfers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
+    member_id: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
+    from_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    to_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    amount: Mapped[float] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str] = mapped_column(String(8), default="INR")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transferred_on: Mapped[date] = mapped_column(Date)
+    wa_message_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Loan(Base):
+    """A loan, in one of two directions:
+
+      • direction='borrowed' — you borrowed from `counterparty` (a bank/person). A liability
+        that reduces net worth. If linked to an account, the principal was received there.
+      • direction='lent'     — you lent to `counterparty` (a friend). An asset that increases
+        net worth. If linked to an account, the principal went out from there.
+
+    Outstanding = principal − sum(payments). Payments reduce it (you repaying a borrowed
+    loan, or a friend repaying a lent loan).
+    """
+    __tablename__ = "loans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
+    member_id: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
+    direction: Mapped[str] = mapped_column(String(16))          # 'borrowed' | 'lent'
+    counterparty: Mapped[str] = mapped_column(String(120))      # bank or friend name
+    principal: Mapped[float] = mapped_column(Numeric(14, 2))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opened_on: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    payments: Mapped[list["LoanPayment"]] = relationship(back_populates="loan")
+
+
+class Budget(Base):
+    """A monthly spending limit for a category (per group)."""
+    __tablename__ = "budgets"
+    __table_args__ = (UniqueConstraint("group_id", "category", name="uq_group_category"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
+    category: Mapped[str] = mapped_column(String(64))
+    monthly_limit: Mapped[float] = mapped_column(Numeric(12, 2))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Recurring(Base):
+    """A recurring money item (bill, EMI, subscription, salary) due on a day each month.
+
+    Drives reminders; it does NOT auto-post transactions — the family confirms each one.
+    """
+    __tablename__ = "recurring"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
+    member_id: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
+    flow: Mapped[str] = mapped_column(String(16))            # 'expense' | 'income'
+    label: Mapped[str] = mapped_column(String(120))
+    amount: Mapped[float] = mapped_column(Numeric(12, 2))
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    day_of_month: Mapped[int] = mapped_column()             # 1..31
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_reminded_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class LoanPayment(Base):
+    """A payment against a loan. For a borrowed loan it's you paying it down; for a lent
+    loan it's the friend repaying you. Reduces the loan's outstanding balance."""
+    __tablename__ = "loan_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    loan_id: Mapped[int] = mapped_column(ForeignKey("loans.id"))
+    amount: Mapped[float] = mapped_column(Numeric(14, 2))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paid_on: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    loan: Mapped["Loan"] = relationship(back_populates="payments")

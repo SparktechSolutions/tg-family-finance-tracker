@@ -9,13 +9,18 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .models import (
     Account,
+    Budget,
     Expense,
     Group,
     InboundEvent,
     Income,
     Insurance,
     Investment,
+    Loan,
+    LoanPayment,
     Member,
+    Recurring,
+    Transfer,
 )
 
 
@@ -74,10 +79,12 @@ def create_expense(
     raw_message: str,
     wa_message_id: str,
     account: Account | None = None,
+    shared: bool = True,
 ) -> Expense | None:
     """Insert an expense. Returns None if this wa_message_id was already stored (idempotent).
 
     If `account` is given, the expense debits it (reflected by reports.account_balance).
+    `shared=False` marks it personal — excluded from settle-up.
     """
     if expense_exists(db, wa_message_id):
         return None
@@ -92,6 +99,7 @@ def create_expense(
         spent_at=spent_at,
         raw_message=raw_message,
         wa_message_id=wa_message_id,
+        shared=shared,
     )
     db.add(exp)
     db.flush()
@@ -198,6 +206,25 @@ def find_account(db: Session, group: Group, token: str,
     return db.scalar(q.order_by(Account.id))
 
 
+def set_account_balance(db: Session, account: Account, target_balance: float) -> Account:
+    """Set the account's *current* displayed balance to `target_balance`.
+
+    Because balance is computed (opening + income credited − expenses debited), we adjust
+    the opening_balance so the displayed balance equals the target, preserving all logged
+    transactions. For a credit card, pass a NEGATIVE target (it's money owed).
+    """
+    credits = float(db.scalar(
+        select(func.coalesce(func.sum(Income.amount), 0)).where(Income.account_id == account.id)
+    ) or 0)
+    debits = float(db.scalar(
+        select(func.coalesce(func.sum(Expense.amount), 0)).where(Expense.account_id == account.id)
+    ) or 0)
+    movement = credits - debits           # net effect of logged transactions
+    account.opening_balance = round(float(target_balance) - movement, 2)
+    db.flush()
+    return account
+
+
 # --- income --------------------------------------------------------------------
 
 def create_income(db: Session, *, group: Group, member: Member | None,
@@ -300,3 +327,124 @@ def unprocessed_events(db: Session) -> list[InboundEvent]:
     return list(db.scalars(
         select(InboundEvent).where(InboundEvent.processed.is_(False)).order_by(InboundEvent.id)
     ).all())
+
+
+# --- transfers (between own accounts) -----------------------------------------
+
+def create_transfer(db: Session, *, group: Group, member: Member | None,
+                    from_account: Account, to_account: Account, amount: float,
+                    currency: str, on: date, note: str | None = None,
+                    wa_message_id: str | None = None) -> Transfer | None:
+    if wa_message_id and db.scalar(
+            select(Transfer.id).where(Transfer.wa_message_id == wa_message_id)):
+        return None
+    t = Transfer(group_id=group.id, member_id=member.id if member else None,
+                 from_account_id=from_account.id, to_account_id=to_account.id,
+                 amount=float(amount), currency=currency, transferred_on=on, note=note,
+                 wa_message_id=wa_message_id)
+    db.add(t)
+    db.flush()
+    return t
+
+
+# --- loans (borrowed from / lent to) ------------------------------------------
+
+def add_loan(db: Session, group: Group, member: Member | None, *, direction: str,
+             counterparty: str, principal: float, on: date,
+             account: Account | None = None, note: str | None = None) -> Loan:
+    ln = Loan(group_id=group.id, member_id=member.id if member else None,
+              direction=direction, counterparty=counterparty, principal=float(principal),
+              account_id=account.id if account else None, opened_on=on, note=note)
+    db.add(ln)
+    db.flush()
+    return ln
+
+
+def find_loan(db: Session, group: Group, counterparty: str,
+              direction: str | None = None) -> Loan | None:
+    q = select(Loan).where(Loan.group_id == group.id,
+                           func.lower(Loan.counterparty) == counterparty.lower())
+    if direction:
+        q = q.where(Loan.direction == direction)
+    return db.scalar(q.order_by(Loan.id.desc()))
+
+
+def add_loan_payment(db: Session, loan: Loan, *, amount: float, on: date,
+                     account: Account | None = None, note: str | None = None) -> LoanPayment:
+    p = LoanPayment(loan_id=loan.id, amount=float(amount),
+                    account_id=account.id if account else None, paid_on=on, note=note)
+    db.add(p)
+    db.flush()
+    return p
+
+
+def list_loans(db: Session, group: Group) -> list[Loan]:
+    return list(db.scalars(
+        select(Loan).where(Loan.group_id == group.id).order_by(Loan.id)).all())
+
+
+# --- budgets ------------------------------------------------------------------
+
+def find_budget(db: Session, group: Group, category: str) -> Budget | None:
+    return db.scalar(select(Budget).where(
+        Budget.group_id == group.id, func.lower(Budget.category) == category.lower()))
+
+
+def set_budget(db: Session, group: Group, category: str, monthly_limit: float) -> Budget:
+    b = find_budget(db, group, category)
+    if b is None:
+        b = Budget(group_id=group.id, category=category, monthly_limit=float(monthly_limit))
+        db.add(b)
+    else:
+        b.monthly_limit = float(monthly_limit)
+    db.flush()
+    return b
+
+
+def list_budgets(db: Session, group: Group) -> list[Budget]:
+    return list(db.scalars(
+        select(Budget).where(Budget.group_id == group.id).order_by(Budget.category)).all())
+
+
+def delete_budget(db: Session, group: Group, category: str) -> bool:
+    b = find_budget(db, group, category)
+    if b is None:
+        return False
+    db.delete(b)
+    db.flush()
+    return True
+
+
+# --- recurring ----------------------------------------------------------------
+
+def add_recurring(db: Session, group: Group, member: Member | None, *, flow: str, label: str,
+                  amount: float, day_of_month: int, category: str | None = None,
+                  account: Account | None = None) -> Recurring:
+    r = Recurring(group_id=group.id, member_id=member.id if member else None, flow=flow,
+                  label=label, amount=float(amount), category=category,
+                  account_id=account.id if account else None,
+                  day_of_month=max(1, min(31, int(day_of_month))), active=True)
+    db.add(r)
+    db.flush()
+    return r
+
+
+def list_recurring(db: Session, group: Group, active_only: bool = True) -> list[Recurring]:
+    q = select(Recurring).where(Recurring.group_id == group.id)
+    if active_only:
+        q = q.where(Recurring.active.is_(True))
+    return list(db.scalars(q.order_by(Recurring.day_of_month)).all())
+
+
+def get_recurring(db: Session, group: Group, rid: int) -> Recurring | None:
+    return db.scalar(select(Recurring).where(
+        Recurring.group_id == group.id, Recurring.id == rid))
+
+
+def delete_recurring(db: Session, group: Group, rid: int) -> bool:
+    r = get_recurring(db, group, rid)
+    if r is None:
+        return False
+    db.delete(r)
+    db.flush()
+    return True

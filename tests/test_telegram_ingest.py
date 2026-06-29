@@ -91,3 +91,37 @@ def test_telegram_bot_added_welcomes(db, monkeypatch):
     }}
     tg.process_update(update)
     assert sent and "Family Finance Tracker" in sent[0][1]
+
+
+def test_telegram_allowlist_blocks_strangers(db, monkeypatch):
+    from app import telegram_bot as tg
+    from app.config import settings
+
+    monkeypatch.setattr(tg, "SessionLocal", lambda: db)
+    monkeypatch.setattr(db, "close", lambda: None)
+    sent = []
+    monkeypatch.setattr(tg, "send_message", lambda chat_id, text: sent.append((chat_id, text)))
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "-123")  # lock to family group
+
+    def msg(chat_id, mid):
+        return {"update_id": mid, "message": {
+            "message_id": mid, "date": 1782000000, "chat": {"id": chat_id, "type": "group"},
+            "from": {"id": 9, "first_name": "Stranger"}, "text": "coffee 80"}}
+
+    tg.process_update(msg(-999, 1))                       # stranger -> ignored
+    assert sent == []
+    assert reports.total(db, crud.get_or_create_group(db, "tg:-999")) == 0
+
+    tg.process_update(msg(-123, 2))                       # family group -> processed
+    assert sent and "Logged" in sent[0][1]
+    assert reports.total(db, crud.get_or_create_group(db, "tg:-123")) == 80
+
+
+def test_allowlist_parsing(monkeypatch):
+    from app import telegram_bot as tg
+    from app.config import settings
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "-100, 200  -300")
+    assert tg.allowed_chat_ids() == {-100, 200, -300}
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "")
+    assert tg.allowed_chat_ids() == set()                 # empty => open
+    assert tg._is_allowed(12345) is True

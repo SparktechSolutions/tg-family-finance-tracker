@@ -7,7 +7,20 @@ from datetime import date
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import Account, Expense, Group, Income, Insurance, Investment, Member
+from .models import (
+    Account,
+    Budget,
+    Expense,
+    Group,
+    Income,
+    Insurance,
+    Investment,
+    Loan,
+    LoanPayment,
+    Member,
+    Recurring,
+    Transfer,
+)
 
 MONTHS = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
@@ -51,7 +64,7 @@ def by_category(db: Session, group: Group, *, start: date | None = None,
 
 
 def by_member(db: Session, group: Group, *, start: date | None = None,
-              end: date | None = None) -> list[tuple[str, float]]:
+              end: date | None = None, shared_only: bool = False) -> list[tuple[str, float]]:
     q = (
         select(func.coalesce(Member.display_name, Member.wa_user_id), func.sum(Expense.amount))
         .join(Member, Member.id == Expense.member_id, isouter=True)
@@ -59,6 +72,8 @@ def by_member(db: Session, group: Group, *, start: date | None = None,
         .group_by(Member.id)
         .order_by(func.sum(Expense.amount).desc())
     )
+    if shared_only:
+        q = q.where(Expense.shared.is_(True))      # exclude personal expenses from the split
     if start:
         q = q.where(Expense.spent_at >= start)
     if end:
@@ -76,17 +91,83 @@ def income_total(db: Session, group: Group, *, start: date | None = None,
     return float(db.scalar(q) or 0)
 
 
-def account_balance(db: Session, account: Account) -> float:
-    """opening_balance + credits (income) - debits (expenses) on this account."""
-    credits = float(db.scalar(
-        select(func.coalesce(func.sum(Income.amount), 0))
-        .where(Income.account_id == account.id)
+def _sum(db, col, *where) -> float:
+    return float(db.scalar(select(func.coalesce(func.sum(col), 0)).where(*where)) or 0)
+
+
+def account_balance(db: Session, account: Account, asof: date | None = None) -> float:
+    """Computed balance: opening + income − expenses ± transfers ± loan cash flows.
+
+    If `asof` is given, only flows dated strictly before `asof` are counted — this gives
+    the balance "as of" that date (used for opening/closing balances over a period). The
+    opening_balance baseline is always included.
+
+    Loan cash flows (only when a loan/payment is linked to this account):
+      • borrowed loan principal received here → +;  lent loan principal sent from here → −
+      • paying a borrowed loan from here → −;       a lent loan repaid into here → +
+    """
+    aid = account.id
+
+    def lt(col):
+        return [col < asof] if asof is not None else []
+
+    credits = _sum(db, Income.amount, Income.account_id == aid, *lt(Income.received_on))
+    debits = _sum(db, Expense.amount, Expense.account_id == aid, *lt(Expense.spent_at))
+    xfer_in = _sum(db, Transfer.amount, Transfer.to_account_id == aid, *lt(Transfer.transferred_on))
+    xfer_out = _sum(db, Transfer.amount, Transfer.from_account_id == aid, *lt(Transfer.transferred_on))
+
+    loan_in = _sum(db, Loan.principal, Loan.account_id == aid, Loan.direction == "borrowed",
+                   *lt(Loan.opened_on))
+    loan_out = _sum(db, Loan.principal, Loan.account_id == aid, Loan.direction == "lent",
+                    *lt(Loan.opened_on))
+    pay_received = float(db.scalar(
+        select(func.coalesce(func.sum(LoanPayment.amount), 0))
+        .join(Loan, Loan.id == LoanPayment.loan_id)
+        .where(LoanPayment.account_id == aid, Loan.direction == "lent", *lt(LoanPayment.paid_on))
     ) or 0)
-    debits = float(db.scalar(
-        select(func.coalesce(func.sum(Expense.amount), 0))
-        .where(Expense.account_id == account.id)
+    pay_made = float(db.scalar(
+        select(func.coalesce(func.sum(LoanPayment.amount), 0))
+        .join(Loan, Loan.id == LoanPayment.loan_id)
+        .where(LoanPayment.account_id == aid, Loan.direction == "borrowed", *lt(LoanPayment.paid_on))
     ) or 0)
-    return round(float(account.opening_balance) + credits - debits, 2)
+
+    bal = (float(account.opening_balance) + credits - debits + xfer_in - xfer_out
+           + loan_in - loan_out + pay_received - pay_made)
+    return round(bal, 2)
+
+
+def period_summary(db: Session, group: Group, start: date, end: date) -> dict:
+    """Income/expense/category/member totals for a period, plus opening & closing balances.
+
+    Opening = total account balances as of `start`; closing = as of `end` (period included).
+    """
+    accounts = db.scalars(
+        select(Account).where(Account.group_id == group.id).order_by(Account.id)).all()
+    acc_rows = []
+    for a in accounts:
+        owner = db.get(Member, a.member_id) if a.member_id else None
+        opening = account_balance(db, a, asof=start)
+        closing = account_balance(db, a, asof=end)
+        acc_rows.append({
+            "id": a.id, "bank_name": a.bank_name, "last4": a.last4, "kind": a.kind,
+            "owner": (owner.display_name or owner.wa_user_id) if owner else None,
+            "opening": opening, "closing": closing, "change": round(closing - opening, 2),
+        })
+    opening_total = round(sum(r["opening"] for r in acc_rows), 2)
+    closing_total = round(sum(r["closing"] for r in acc_rows), 2)
+    inc = income_total(db, group, start=start, end=end)
+    exp = total(db, group, start=start, end=end)
+    return {
+        "start": start.isoformat(), "end": end.isoformat(),
+        "income": inc, "expenses": exp, "net": round(inc - exp, 2),
+        "opening_balance": opening_total, "closing_balance": closing_total,
+        "net_change": round(closing_total - opening_total, 2),
+        "by_category": [{"category": c, "amount": s}
+                        for c, s in by_category(db, group, start=start, end=end)],
+        "by_member": [{"member": m, "amount": s}
+                      for m, s in by_member(db, group, start=start, end=end)],
+        "accounts": acc_rows,
+    }
 
 
 def accounts_overview(db: Session, group: Group) -> list[dict]:
@@ -158,18 +239,135 @@ def upcoming_premiums(db: Session, group: Group) -> list[dict]:
     return out
 
 
+def loan_outstanding(db: Session, loan: Loan) -> float:
+    paid = _sum(db, LoanPayment.amount, LoanPayment.loan_id == loan.id)
+    return round(float(loan.principal) - paid, 2)
+
+
+def loans_overview(db: Session, group: Group) -> list[dict]:
+    out = []
+    for ln in db.scalars(
+        select(Loan).where(Loan.group_id == group.id).order_by(Loan.id)
+    ).all():
+        owner = db.get(Member, ln.member_id) if ln.member_id else None
+        acct = db.get(Account, ln.account_id) if ln.account_id else None
+        out.append({
+            "id": ln.id,
+            "direction": ln.direction,                       # 'borrowed' | 'lent'
+            "counterparty": ln.counterparty,
+            "principal": float(ln.principal),
+            "outstanding": loan_outstanding(db, ln),
+            "owner": (owner.display_name or owner.wa_user_id) if owner else None,
+            "account": (f"{acct.bank_name} ****{acct.last4}" if acct else None),
+            "opened_on": ln.opened_on.isoformat(),
+        })
+    return out
+
+
+def loan_totals(db: Session, group: Group) -> dict:
+    rows = loans_overview(db, group)
+    lent = round(sum(r["outstanding"] for r in rows if r["direction"] == "lent"), 2)
+    borrowed = round(sum(r["outstanding"] for r in rows if r["direction"] == "borrowed"), 2)
+    return {"lent_outstanding": lent, "borrowed_outstanding": borrowed}
+
+
 def net_worth(db: Session, group: Group) -> dict:
-    """Household snapshot: cash in accounts + investments value, plus income/expense flow."""
+    """Household snapshot: cash + investments + money owed to you − money you owe."""
     accounts = accounts_overview(db, group)
     cash = round(sum(a["balance"] for a in accounts), 2)
     invest = round(investments_value(db, group), 2)
+    lt = loan_totals(db, group)
+    nw = round(cash + invest + lt["lent_outstanding"] - lt["borrowed_outstanding"], 2)
     return {
         "cash_in_accounts": cash,
         "investments_value": invest,
-        "net_worth": round(cash + invest, 2),
+        "lent_outstanding": lt["lent_outstanding"],        # friends owe you (asset)
+        "borrowed_outstanding": lt["borrowed_outstanding"],  # you owe (liability)
+        "net_worth": nw,
         "total_income": income_total(db, group),
         "total_expenses": total(db, group),
     }
+
+
+def budget_status(db: Session, group: Group, *, on: date | None = None) -> list[dict]:
+    """For each budget: this-month spend in that category, limit, remaining, and percent."""
+    today = on or date.today()
+    start, end = month_bounds(today.year, today.month)
+    out = []
+    for b in db.scalars(
+        select(Budget).where(Budget.group_id == group.id).order_by(Budget.category)
+    ).all():
+        spent = total(db, group, category=b.category, start=start, end=end)
+        limit = float(b.monthly_limit)
+        pct = round(100 * spent / limit, 1) if limit else 0.0
+        out.append({"category": b.category, "limit": limit, "spent": round(spent, 2),
+                    "remaining": round(limit - spent, 2), "pct": pct})
+    return out
+
+
+def budget_alert_for(db: Session, group: Group, category: str,
+                     on: date | None = None) -> str | None:
+    """Return a warning string if the category has a budget and is near/over it, else None."""
+    b = db.scalar(select(Budget).where(
+        Budget.group_id == group.id, func.lower(Budget.category) == category.lower()))
+    if b is None:
+        return None
+    today = on or date.today()
+    start, end = month_bounds(today.year, today.month)
+    spent = total(db, group, category=b.category, start=start, end=end)
+    limit = float(b.monthly_limit)
+    if limit <= 0:
+        return None
+    pct = 100 * spent / limit
+    cur = group.currency
+    if spent > limit:
+        return f"🔴 Over {b.category} budget: {cur} {spent:,.0f} of {cur} {limit:,.0f}"
+    if pct >= 80:
+        return f"🟠 {pct:.0f}% of {b.category} budget used ({cur} {spent:,.0f}/{cur} {limit:,.0f})"
+    return None
+
+
+def _next_due(day_of_month: int, today: date) -> date:
+    import calendar
+    y, m = today.year, today.month
+    dom = min(day_of_month, calendar.monthrange(y, m)[1])
+    candidate = date(y, m, dom)
+    if candidate < today:
+        m2, y2 = (m + 1, y) if m < 12 else (1, y + 1)
+        dom2 = min(day_of_month, calendar.monthrange(y2, m2)[1])
+        candidate = date(y2, m2, dom2)
+    return candidate
+
+
+def recurring_overview(db: Session, group: Group) -> list[dict]:
+    today = date.today()
+    out = []
+    for r in db.scalars(
+        select(Recurring).where(Recurring.group_id == group.id, Recurring.active.is_(True))
+        .order_by(Recurring.day_of_month)
+    ).all():
+        due = _next_due(r.day_of_month, today)
+        out.append({"id": r.id, "flow": r.flow, "label": r.label, "amount": float(r.amount),
+                    "category": r.category, "day_of_month": r.day_of_month,
+                    "next_due": due.isoformat(), "days_until": (due - today).days})
+    return out
+
+
+def reminders(db: Session, group: Group, within_days: int = 3) -> list[str]:
+    """Human-readable reminders for recurring items and insurance premiums due soon."""
+    cur = group.currency
+    out = []
+    for r in recurring_overview(db, group):
+        if 0 <= r["days_until"] <= within_days:
+            verb = "due" if r["flow"] == "expense" else "expected"
+            when = "today" if r["days_until"] == 0 else f"in {r['days_until']}d"
+            out.append(f"• {r['label']} — {cur} {r['amount']:,.0f} {verb} {when} ({r['next_due']})")
+    for p in upcoming_premiums(db, group):
+        d = p["days_until_due"]
+        if d is not None and 0 <= d <= within_days:
+            when = "today" if d == 0 else f"in {d}d"
+            out.append(f"• 🛡️ {p['name']} premium — {cur} {p['premium']:,.0f} due {when} ({p['due_date']})")
+    return out
 
 
 @dataclass
@@ -181,12 +379,12 @@ class Settlement:
 
 def settle_up(db: Session, group: Group, *, start: date | None = None,
               end: date | None = None) -> list[Settlement]:
-    """Equal-split 'who owes whom'. Assumes every member shares all expenses equally.
+    """Equal-split 'who owes whom' over SHARED expenses only (personal ones are excluded).
 
     Returns a minimal-ish set of transfers to square everyone up. Members who paid
     nothing still owe their share, so we seed every group member at 0.
     """
-    paid = dict(by_member(db, group, start=start, end=end))
+    paid = dict(by_member(db, group, start=start, end=end, shared_only=True))
     if not paid:
         return []
     # Include all group members (even those who never paid) so they're charged a share.

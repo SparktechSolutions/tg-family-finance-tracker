@@ -65,18 +65,90 @@ def add_income(amount: float, source: str = "Income", account: str = "") -> dict
 
 
 @mcp.tool()
-def add_account(bank_name: str, last4: str, kind: str = "bank",
-                opening_balance: float = 0) -> dict:
-    """Add a bank account or credit card. kind = "bank" or "credit_card".
-    Only the bank name and last 4 digits are stored."""
-    return core_ops.add_account(bank_name=bank_name, last4=last4, kind=kind,
-                                opening_balance=opening_balance)
+def add_account(bank_name: str, last4: str, kind: str = "bank", balance: float = 0) -> dict:
+    """Add a bank account or credit card. kind = "bank" or "credit_card". Only the bank name
+    and last 4 digits are stored. `balance` = current cash (bank) or amount owed (card)."""
+    return core_ops.add_account(bank_name=bank_name, last4=last4, kind=kind, balance=balance)
+
+
+@mcp.tool()
+def set_account_balance(account: str, balance: float) -> dict:
+    """Set an account's current balance (bank = cash on hand; credit card = amount owed).
+    Identify the account by bank name or last-4."""
+    return core_ops.set_account_balance(account=account, balance=balance)
 
 
 @mcp.tool()
 def list_accounts() -> dict:
     """List all accounts with their current balances."""
     return core_ops.list_accounts()
+
+
+@mcp.tool()
+def transfer(from_account: str, to_account: str, amount: float) -> dict:
+    """Move money between two of your own accounts (by bank name or last-4)."""
+    return core_ops.transfer(from_account=from_account, to_account=to_account, amount=amount)
+
+
+@mcp.tool()
+def lend(amount: float, friend: str, account: str = "") -> dict:
+    """Record money you lent to a friend (they owe you). Optionally from an account."""
+    return core_ops.lend(amount=amount, friend=friend, account=account or None)
+
+
+@mcp.tool()
+def borrow(amount: float, lender: str, account: str = "") -> dict:
+    """Record money you borrowed (you owe it). Optionally received into an account."""
+    return core_ops.borrow(amount=amount, lender=lender, account=account or None)
+
+
+@mcp.tool()
+def loan_payment(counterparty: str, amount: float, direction: str = "borrowed",
+                 account: str = "") -> dict:
+    """Record a loan payment. direction='borrowed' = you repay a loan;
+    'lent' = a friend repays you."""
+    return core_ops.loan_payment(counterparty=counterparty, amount=amount,
+                                 direction=direction, account=account or None)
+
+
+@mcp.tool()
+def list_loans() -> dict:
+    """List loans — money you owe and money owed to you — with outstanding balances."""
+    return core_ops.list_loans()
+
+
+@mcp.tool()
+def set_budget(category: str, monthly_limit: float) -> dict:
+    """Set a monthly spending limit for a category."""
+    return core_ops.set_budget(category=category, monthly_limit=monthly_limit)
+
+
+@mcp.tool()
+def budget_status() -> dict:
+    """This month's spend vs limit for each budgeted category."""
+    return core_ops.budget_status()
+
+
+@mcp.tool()
+def add_recurring(flow: str, label: str, amount: float, day_of_month: int,
+                  category: str = "", account: str = "") -> dict:
+    """Add a recurring item (flow='expense'|'income') due on a given day each month —
+    rent, EMI, subscription, salary, etc."""
+    return core_ops.add_recurring(flow=flow, label=label, amount=amount,
+                                  day_of_month=day_of_month, category=category or None,
+                                  account=account or None)
+
+
+@mcp.tool()
+def list_recurring() -> dict:
+    """List recurring items with their next due dates."""
+    return core_ops.list_recurring()
+
+
+@mcp.tool()
+def reminders() -> dict:
+    """What's due in the next 7 days (recurring items + insurance premiums)."""
+    return core_ops.reminders()
 
 
 @mcp.tool()

@@ -15,7 +15,7 @@ from app.whatsapp import extract_events, extract_messages
     ("€45.50 dinner", 45.5, "Food"),                 # euro + decimal
     ("£12 movie", 12, "Entertainment"),              # pound
     ("petrol 3000", 3000, "Transport"),              # 4-digit no comma
-    ("₹1,250.75 groceries", 1250.75, "Food"),        # western grouping + decimal
+    ("₹1,250.75 groceries", 1250.75, "Groceries"),   # western grouping + decimal
 ])
 def test_parser_variants(text, amount, category):
     p = parse_expense(text)

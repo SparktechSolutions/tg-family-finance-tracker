@@ -73,6 +73,32 @@ def test_recent_expenses(db):
     assert len(rows) == 2
 
 
+def test_connector_transfer_and_loans(db):
+    core_ops.add_account("HDFC", "1", balance=10000, db=db)
+    core_ops.add_account("ICICI", "2", balance=0, db=db)
+    core_ops.transfer("HDFC", "ICICI", 4000, db=db)
+    accts = {a["bank_name"]: a for a in core_ops.list_accounts(db=db)["accounts"]}
+    assert accts["HDFC"]["balance"] == 6000 and accts["ICICI"]["balance"] == 4000
+
+    core_ops.lend(3000, "Raju", account="hdfc", db=db)
+    core_ops.borrow(50000, "SBI", account="hdfc", db=db)
+    nw = core_ops.net_worth(db=db)
+    assert nw["lent_outstanding"] == 3000 and nw["borrowed_outstanding"] == 50000
+    core_ops.loan_payment("SBI", 20000, direction="borrowed", account="hdfc", db=db)
+    assert core_ops.net_worth(db=db)["borrowed_outstanding"] == 30000
+    assert {l["counterparty"] for l in core_ops.list_loans(db=db)["loans"]} == {"Raju", "SBI"}
+
+
+def test_connector_budgets_and_recurring(db):
+    core_ops.set_budget("Food", 8000, db=db)
+    core_ops.log_expense(amount=500, category="Food", db=db)
+    b = core_ops.budget_status(db=db)["budgets"][0]
+    assert b["category"] == "Food" and b["limit"] == 8000 and b["spent"] == 500
+    core_ops.add_recurring("expense", "Rent", 15000, 1, db=db)
+    recs = core_ops.list_recurring(db=db)["recurring"]
+    assert recs[0]["label"] == "Rent" and recs[0]["flow"] == "expense"
+
+
 def test_log_refund_credits_and_nets(db):
     core_ops.add_account("HDFC", "1234", db=db)
     core_ops.add_income(10000, "salary", account="hdfc", db=db)

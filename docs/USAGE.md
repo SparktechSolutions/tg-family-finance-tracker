@@ -78,6 +78,22 @@ A message **without** a number is ignored as normal chatter.
 | `/start` | add/refresh your name and accounts (interactive) |
 | `/accounts` | list all accounts with their current balances |
 
+Set how much is actually in an account — on creation or anytime later:
+
+```
+/account add HDFC 1234 50000          # bank account with a starting balance
+/account add ICICI credit 5678 12000  # credit card with amount currently owed
+/account balance HDFC 60000           # update a bank balance later
+/account balance ICICI 9000           # update a card's amount owed later
+```
+
+During `/start` onboarding you can include the balance too: `HDFC 1234 50000` or
+`ICICI credit 5678 12000`.
+
+A **bank** balance is cash you have (adds to net worth). A **credit-card** balance is what
+you *owe* (subtracts from net worth). Spending from a card with `>icici` increases what you
+owe; paying it down with `/account balance` lowers it.
+
 **Balance** of an account = opening balance + income credited − expenses debited.
 Spending on a **credit card** shows as a negative balance (what you owe the card).
 
@@ -123,6 +139,49 @@ refund 500 #shopping >hdfc                  (keyword form, no slash)
 
 It links to your most recent matching expense automatically. Use this (not `/income`)
 when a purchase is reversed. See [SYNC.md](SYNC.md) for the full model.
+
+## 6c. Transfers & loans
+
+**Move money between your own accounts** (doesn't change net worth):
+```
+/transfer 5000 hdfc icici
+```
+
+**Loans** — money you lent to friends (they owe you) and money you borrowed (you owe):
+```
+/lend 3000 Raju >hdfc        # you lent 3000 (cash leaves HDFC); Raju owes you
+/borrow 50000 SBI >hdfc      # you borrowed 50000 into HDFC; you owe SBI
+/loan collect Raju 1000 >hdfc   # Raju repays you (cash into HDFC)
+/loan pay SBI 20000 >hdfc       # you repay the bank (cash from HDFC)
+/loans                          # outstanding: who you owe & who owes you
+```
+The `>account` is optional. Lent amounts count as an asset (add to net worth); borrowed
+amounts are a liability (subtract). Repayments reduce the outstanding balance.
+
+## 6d. Budgets, recurring bills & personal expenses
+
+**Budgets** — a monthly limit per category; you get a warning when near/over:
+```
+/budget set Food 8000        /budget        /budget remove Food
+```
+
+**Recurring** — bills, EMIs, subscriptions, salary. The family gets a reminder when due:
+```
+/recurring add expense 15000 1 Rent        # 15,000 on day 1 each month
+/recurring add income 50000 1 Salary
+/upcoming                                   # what's due soon
+```
+
+**Personal (not shared)** — keep an expense out of settle-up by adding `!personal`:
+```
+Spa 1500 !personal
+```
+
+**Cash & assets** — track cash on hand and assets (gold, property) for net worth:
+```
+/account add Wallet cash 2000
+/account add Gold asset 150000
+```
 
 ## 7. Reports
 

@@ -134,14 +134,134 @@ def add_income(amount: float, source: str = "Income", account: str | None = None
 
 
 def add_account(bank_name: str, last4: str, kind: str = "bank",
-                opening_balance: float = 0, *, db: Session | None = None) -> dict:
-    """Add a bank account or credit card (kind='bank'|'credit_card'). Stores bank + last4 only."""
+                balance: float = 0, *, db: Session | None = None) -> dict:
+    """Add a bank account or credit card (kind='bank'|'credit_card'). Stores bank + last4 only.
+
+    `balance` is the account's current balance: for a bank it's cash on hand; for a credit
+    card it's the amount currently owed (stored internally as negative).
+    """
     def op(db):
         group, member = _ctx(db)
+        opening = -abs(float(balance)) if kind == "credit_card" else float(balance)
         acc = crud.add_account(db, group, member, bank_name=bank_name, last4=last4,
-                               kind=kind, opening_balance=float(opening_balance))
-        return {"ok": True, "bank_name": acc.bank_name, "last4": acc.last4, "kind": acc.kind}
+                               kind=kind, opening_balance=opening)
+        return {"ok": True, "bank_name": acc.bank_name, "last4": acc.last4, "kind": acc.kind,
+                "balance": balance}
     return _run(op, db)
+
+
+def set_account_balance(account: str, balance: float, *, db: Session | None = None) -> dict:
+    """Set an account's current balance (bank = cash; credit card = amount owed)."""
+    def op(db):
+        group, _ = _ctx(db)
+        acc = crud.find_account(db, group, account)
+        if acc is None:
+            return {"ok": False, "error": f"No account matching '{account}'."}
+        target = -abs(float(balance)) if acc.kind == "credit_card" else float(balance)
+        crud.set_account_balance(db, acc, target)
+        return {"ok": True, "account": f"{acc.bank_name} ****{acc.last4}",
+                "kind": acc.kind, "balance": float(balance)}
+    return _run(op, db)
+
+
+def transfer(from_account: str, to_account: str, amount: float, *,
+             db: Session | None = None) -> dict:
+    """Move money between your own accounts (by bank name or last-4). Net worth unchanged."""
+    def op(db):
+        group, member = _ctx(db)
+        src = crud.find_account(db, group, from_account)
+        dst = crud.find_account(db, group, to_account)
+        if src is None or dst is None:
+            return {"ok": False, "error": "account not found"}
+        if src.id == dst.id:
+            return {"ok": False, "error": "pick two different accounts"}
+        crud.create_transfer(db, group=group, member=member, from_account=src, to_account=dst,
+                             amount=float(amount), currency=group.currency, on=date.today(),
+                             wa_message_id=_mid())
+        return {"ok": True, "amount": float(amount),
+                "from": f"{src.bank_name} ****{src.last4}", "to": f"{dst.bank_name} ****{dst.last4}"}
+    return _run(op, db)
+
+
+def lend(amount: float, friend: str, account: str | None = None, *,
+         db: Session | None = None) -> dict:
+    """Record money you lent to a friend (they owe you). Optionally from an account."""
+    return _add_loan("lent", amount, friend, account, db)
+
+
+def borrow(amount: float, lender: str, account: str | None = None, *,
+           db: Session | None = None) -> dict:
+    """Record money you borrowed (you owe it). Optionally received into an account."""
+    return _add_loan("borrowed", amount, lender, account, db)
+
+
+def _add_loan(direction, amount, counterparty, account, db):
+    def op(db):
+        group, member = _ctx(db)
+        acc = crud.find_account(db, group, account) if account else None
+        crud.add_loan(db, group, member, direction=direction, counterparty=counterparty,
+                      principal=float(amount), on=date.today(), account=acc)
+        return {"ok": True, "direction": direction, "counterparty": counterparty,
+                "amount": float(amount)}
+    return _run(op, db)
+
+
+def loan_payment(counterparty: str, amount: float, direction: str = "borrowed",
+                 account: str | None = None, *, db: Session | None = None) -> dict:
+    """Record a loan payment. direction='borrowed' = you repay; 'lent' = friend repays you."""
+    def op(db):
+        group, _ = _ctx(db)
+        loan = crud.find_loan(db, group, counterparty, direction=direction)
+        if loan is None:
+            return {"ok": False, "error": f"no {direction} loan with '{counterparty}'"}
+        acc = crud.find_account(db, group, account) if account else None
+        crud.add_loan_payment(db, loan, amount=float(amount), on=date.today(), account=acc)
+        return {"ok": True, "counterparty": counterparty, "paid": float(amount),
+                "outstanding": reports.loan_outstanding(db, loan)}
+    return _run(op, db)
+
+
+def list_loans(*, db: Session | None = None) -> dict:
+    """List loans (money you owe and money owed to you) with outstanding balances."""
+    return _run(lambda db: {"loans": reports.loans_overview(db, _ctx(db)[0])}, db)
+
+
+def set_budget(category: str, monthly_limit: float, *, db: Session | None = None) -> dict:
+    """Set a monthly spending limit for a category."""
+    def op(db):
+        group, _ = _ctx(db)
+        crud.set_budget(db, group, category.capitalize(), float(monthly_limit))
+        return {"ok": True, "category": category.capitalize(), "monthly_limit": float(monthly_limit)}
+    return _run(op, db)
+
+
+def budget_status(*, db: Session | None = None) -> dict:
+    """This month's spend vs limit for each budgeted category."""
+    return _run(lambda db: {"budgets": reports.budget_status(db, _ctx(db)[0])}, db)
+
+
+def add_recurring(flow: str, label: str, amount: float, day_of_month: int,
+                  category: str | None = None, account: str | None = None, *,
+                  db: Session | None = None) -> dict:
+    """Add a recurring bill/EMI/subscription/salary (flow='expense'|'income') due on a day."""
+    def op(db):
+        group, member = _ctx(db)
+        acc = crud.find_account(db, group, account) if account else None
+        r = crud.add_recurring(db, group, member, flow=flow, label=label, amount=float(amount),
+                               day_of_month=int(day_of_month), category=category, account=acc)
+        return {"ok": True, "id": r.id, "label": r.label, "flow": r.flow,
+                "day_of_month": r.day_of_month}
+    return _run(op, db)
+
+
+def list_recurring(*, db: Session | None = None) -> dict:
+    """List recurring items with their next due dates."""
+    return _run(lambda db: {"recurring": reports.recurring_overview(db, _ctx(db)[0])}, db)
+
+
+def reminders(*, db: Session | None = None) -> dict:
+    """Items (recurring + insurance premiums) due in the next 7 days."""
+    return _run(lambda db: {"reminders": reports.reminders(db, _ctx(db)[0], within_days=7)}, db)
 
 
 def add_investment(name: str, kind: str = "other", invested: float = 0,
