@@ -14,7 +14,8 @@
 
   <div class="cards">
     <div class="card"><div class="label">Net worth</div><div class="value big" id="networth">—</div></div>
-    <div class="card"><div class="label">Cash in accounts</div><div class="value" id="cash">—</div></div>
+    <div class="card"><div class="label">Accounts &amp; assets</div><div class="value" id="cash">—</div></div>
+    <div class="card"><div class="label">Total owed · cards + loans</div><div class="value neg" id="owed">—</div></div>
     <div class="card"><div class="label">Investments</div><div class="value" id="investVal">—</div></div>
     <div class="card"><div class="label">Income (this month)</div><div class="value pos" id="incMtd">—</div></div>
     <div class="card"><div class="label">Expenses (this month)</div><div class="value neg" id="expMtd">—</div></div>
@@ -88,7 +89,10 @@ async function load() {
     $("banner").classList.add("hidden");
 
     $("networth").textContent = money(nw.net_worth);
-    $("cash").textContent = money(nw.cash_in_accounts);
+    // Assets = money you have (banks + cash + asset accounts); card debt excluded.
+    $("cash").textContent = money(nw.assets_in_accounts != null ? nw.assets_in_accounts : nw.cash_in_accounts);
+    const totalOwed = nw.total_owed != null ? nw.total_owed : ((nw.credit_card_owed||0) + (nw.borrowed_outstanding||0));
+    $("owed").textContent = money(totalOwed);
     $("investVal").textContent = money(nw.investments_value);
     $("incMtd").textContent = money(ms.income);
     $("expMtd").textContent = money(ms.expenses);

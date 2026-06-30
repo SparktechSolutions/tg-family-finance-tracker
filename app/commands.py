@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import crud, onboarding, reports
@@ -35,6 +36,7 @@ HELP_TEXT = (
     "• `/due` — upcoming premiums\n\n"
     "*Transfers & loans:*\n"
     "• `/transfer <amount> <from> <to>` — move money between your accounts\n"
+    "• `/paycard <card> <amount> from <source>` — pay a card due (owed ↓, source ↓)\n"
     "• `/lend <amount> <friend> [>account]` — you lent money (they owe you)\n"
     "• `/borrow <amount> <lender> [>account]` — you borrowed (you owe)\n"
     "• `/loan pay <lender> <amount>` · `/loan collect <friend> <amount>` · `/loans`\n\n"
@@ -96,6 +98,8 @@ def handle(db: Session, group: Group, member: Member, text: str) -> str:
         return _account(db, group, member, args, cur)
     if cmd == "transfer":
         return _transfer(db, group, member, args, text, cur)
+    if cmd in ("paycard", "paybill", "pay"):
+        return _paycard(db, group, member, args, text, cur)
     if cmd in ("lend", "lent"):
         return _loan_add(db, group, member, args, text, cur, "lent")
     if cmd in ("borrow", "borrowed"):
@@ -186,6 +190,9 @@ def record_refund(db, group, member, text: str, cur: str, wa_message_id: str) ->
         return ("Usage: /refund <amount> [#category] [>account] [note]\n"
                 "e.g. /refund 500 #food >hdfc returned items")
     account = crud.find_account(db, group, parsed.account_hint) if parsed.account_hint else None
+    if account is None:
+        account = crud.find_account_in_text(db, group, text, member=member,
+                                             skip_amount=parsed.amount)
     # Try to link to the latest matching expense (same category, same payer) for context.
     original = crud.latest_expense(db, group, member=member, category=parsed.category) \
         or crud.latest_expense(db, group, category=parsed.category)
@@ -313,6 +320,73 @@ def _transfer(db, group, member, args, text, cur) -> str:
             f"{dst.bank_name} ****{dst.last4}")
 
 
+def _cards_matching(db, group, token):
+    """All accounts whose name or last-4 matches `token` (used to pick the right card)."""
+    from sqlalchemy import or_ as _or
+    return db.scalars(select(crud.Account).where(
+        crud.Account.group_id == group.id,
+        _or(func.lower(crud.Account.bank_name) == token.lower(), crud.Account.last4 == token),
+    ).order_by(crud.Account.id)).all()
+
+
+def _paycard(db, group, member, args, text, cur) -> str:
+    """Pay a credit-card due: reduce the card's owed and deduct from a source account.
+
+    Usage: /paycard <card> <amount> [from <source>]
+      e.g. /paycard hsbc 2000 from dcb   ·   /paycard 6511 5000 from hdfc 0611
+    Recorded as a transfer source → card, so the card's owed drops and the source falls.
+    """
+    toks = [t.lstrip(">") for t in args if t.lower() not in ("from", "to", "->", "→")]
+    # A token is an "account token" if it matches some account by name or last-4. The amount
+    # is then the numeric token that is NOT an account's last-4 (so "/paycard 6511 500 from
+    # hdfc 0611" reads 500 as the amount, not the card/source last-4 digits).
+    acct_toks = [t for t in toks if _cards_matching(db, group, t)]
+    amount_toks = [t for t in toks if _NUM_RE.match(t) and t not in acct_toks]
+    if not amount_toks or not acct_toks:
+        return ("Usage: /paycard <card> <amount> [from <source>]\n"
+                "e.g. /paycard hsbc 2000 from dcb")
+    amount = _num(amount_toks[0])
+    if amount <= 0:
+        return "Enter an amount greater than 0. e.g. /paycard hsbc 2000 from dcb"
+
+    # Pick the card: the first account token that resolves to a credit card.
+    card = None
+    card_tok = None
+    for n in acct_toks:
+        cc = [a for a in _cards_matching(db, group, n) if a.kind == "credit_card"]
+        if cc:
+            card, card_tok = cc[0], n
+            break
+    if card is None:
+        return ("Which card? Name it (or its last-4): /paycard <card> <amount> from <source>\n"
+                "See /accounts for your cards.")
+
+    # Pick the source: a non-card account named by a different token.
+    source = None
+    for n in acct_toks:
+        if n == card_tok:
+            continue
+        banks = [a for a in _cards_matching(db, group, n) if a.kind != "credit_card"]
+        if banks:
+            source = banks[0]
+            break
+    if source is None:
+        return (f"Pay {card.bank_name} ****{card.last4} from which account? "
+                f"Add it: /paycard {card_tok} {amount_toks[0]} from <bank>")
+    if source.id == card.id:
+        return "The source and the card can't be the same account."
+
+    crud.create_transfer(db, group=group, member=member, from_account=source, to_account=card,
+                         amount=amount, currency=cur, on=_today(),
+                         note=f"card payment: {card.bank_name} ****{card.last4}",
+                         wa_message_id=f"cmd-paycard-{datetime.utcnow().timestamp()}")
+    new_owed = -reports.account_balance(db, card)
+    new_owed = max(new_owed, 0)
+    return (f"💳 Paid {_fmt(amount, cur)} to {card.bank_name} ****{card.last4} "
+            f"from {source.bank_name} ****{source.last4}\n"
+            f"   Remaining owed: {_fmt(new_owed, cur)}")
+
+
 def _loan_add(db, group, member, args, text, cur, direction) -> str:
     if not args:
         verb = "lend" if direction == "lent" else "borrow"
@@ -399,6 +473,9 @@ def _income(db, group, member, args, text, cur) -> str:
             source_words.append(t)
     if amount is None:
         return "I couldn't find an amount. e.g. /income 50000 salary >hdfc"
+    # No '>account'? Credit an account named in plain text ("/income 50000 salary to sbi 8656").
+    if acct is None:
+        acct = crud.find_account_in_text(db, group, text, member=member, skip_amount=amount)
     source = " ".join(source_words).strip() or "Income"
     inc = crud.create_income(
         db, group=group, member=member, account=acct, amount=amount, currency=cur,

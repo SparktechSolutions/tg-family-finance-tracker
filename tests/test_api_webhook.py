@@ -195,6 +195,59 @@ def test_transfers_and_loans_via_api(client):
     assert client.get(f"/api/loans?group_id={gid}").json()[0]["outstanding"] == 2000
 
 
+def test_income_via_api(client):
+    gid = _make_group(client)
+    a = client.post("/api/accounts", json={"group_id": gid, "bank_name": "HDFC", "last4": "1",
+                                           "kind": "bank", "balance": 0}).json()["id"]
+    client.post("/api/incomes", json={"group_id": gid, "amount": 50000, "source": "salary",
+                                      "account_id": a})
+    client.post("/api/incomes", json={"group_id": gid, "amount": 2000, "source": "bonus"})
+    rows = client.get(f"/api/incomes?group_id={gid}").json()
+    assert {r["source"] for r in rows} == {"Salary", "Bonus"}
+    # Salary credited the account.
+    bal = {x["bank_name"]: x for x in client.get(f"/api/accounts?group_id={gid}").json()}["HDFC"]["balance"]
+    assert bal == 50000
+    # Delete one.
+    client.delete(f"/api/incomes/{rows[0]['id']}?group_id={gid}")
+    assert len(client.get(f"/api/incomes?group_id={gid}").json()) == 1
+
+
+def test_full_expenses_list_ignores_period(client):
+    gid = _make_group(client)
+    client.post("/webhook", json=_msg("lunch 250 #food", "x1"))
+    # Even a non-overlapping period must NOT hide the full /api/expenses list (no date filter).
+    rows = client.get(f"/api/expenses?group_id={gid}").json()
+    assert any(r["category"] == "Food" for r in rows)
+
+
+def test_add_and_delete_expense_via_api(client):
+    gid = _make_group(client)
+    bank = client.post("/api/accounts", json={"group_id": gid, "bank_name": "HDFC",
+                       "last4": "1234", "kind": "bank", "balance": 10000}).json()["id"]
+    card = client.post("/api/accounts", json={"group_id": gid, "bank_name": "HSBC",
+                       "last4": "7893", "kind": "credit_card", "balance": 0}).json()["id"]
+
+    # Expense paid from the bank -> balance drops; category inferred from the note.
+    r = client.post("/api/expenses", json={"group_id": gid, "amount": 250,
+                    "note": "swiggy lunch", "account_id": bank}).json()
+    assert r["ok"] and r["category"] == "Food"
+    accts = {a["bank_name"]: a for a in client.get(f"/api/accounts?group_id={gid}").json()}
+    assert accts["HDFC"]["balance"] == 9750
+
+    # Expense charged to the card -> owed goes up (balance more negative).
+    eid = client.post("/api/expenses", json={"group_id": gid, "amount": 2002,
+                      "note": "groceries", "account_id": card}).json()["id"]
+    accts = {a["bank_name"]: a for a in client.get(f"/api/accounts?group_id={gid}").json()}
+    assert accts["HSBC"]["balance"] == -2002
+
+    # Ledger row carries the source account; deleting it restores the owed.
+    rows = client.get(f"/api/expenses?group_id={gid}").json()
+    assert any(x["account"] == "HSBC ****7893" for x in rows)
+    client.delete(f"/api/expenses/{eid}?group_id={gid}")
+    accts = {a["bank_name"]: a for a in client.get(f"/api/accounts?group_id={gid}").json()}
+    assert accts["HSBC"]["balance"] == 0
+
+
 def test_budgets_and_recurring_via_api(client):
     import time
     gid = _make_group(client)

@@ -41,4 +41,6 @@ def health() -> dict:
 
 @app.get("/")
 def dashboard() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    # Never cache the dashboard HTML, so users always get the latest UI on reload.
+    return FileResponse(STATIC_DIR / "index.html",
+                        headers={"Cache-Control": "no-store, max-age=0"})

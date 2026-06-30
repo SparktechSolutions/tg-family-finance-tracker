@@ -153,8 +153,20 @@ def period_summary(db: Session, group: Group, start: date, end: date) -> dict:
             "owner": (owner.display_name or owner.wa_user_id) if owner else None,
             "opening": opening, "closing": closing, "change": round(closing - opening, 2),
         })
-    opening_total = round(sum(r["opening"] for r in acc_rows), 2)
-    closing_total = round(sum(r["closing"] for r in acc_rows), 2)
+    # Opening/closing "balance" tracks ASSETS only (bank + cash + asset, plus any card in
+    # credit). Credit-card debt is a liability — spending on a card raises what you owe and
+    # lowers net worth, but does NOT reduce your asset balance until you pay the card.
+    def _assets_asof(key: str) -> float:
+        tot = 0.0
+        for r in acc_rows:
+            tot += max(r[key], 0) if r["kind"] == "credit_card" else r[key]
+        return round(tot, 2)
+    opening_total = _assets_asof("opening")
+    closing_total = _assets_asof("closing")
+    # Net-worth change over the period (includes liabilities like card dues & loans, so a
+    # card spend that doesn't move assets still shows here as net worth falling).
+    opening_nw = networth_asof(db, group, asof=start)
+    closing_nw = networth_asof(db, group, asof=end)
     inc = income_total(db, group, start=start, end=end)
     exp = total(db, group, start=start, end=end)
     return {
@@ -162,6 +174,8 @@ def period_summary(db: Session, group: Group, start: date, end: date) -> dict:
         "income": inc, "expenses": exp, "net": round(inc - exp, 2),
         "opening_balance": opening_total, "closing_balance": closing_total,
         "net_change": round(closing_total - opening_total, 2),
+        "opening_net_worth": opening_nw, "closing_net_worth": closing_nw,
+        "net_worth_change": round(closing_nw - opening_nw, 2),
         "by_category": [{"category": c, "amount": s}
                         for c, s in by_category(db, group, start=start, end=end)],
         "by_member": [{"member": m, "amount": s}
@@ -264,25 +278,70 @@ def loans_overview(db: Session, group: Group) -> list[dict]:
     return out
 
 
-def loan_totals(db: Session, group: Group) -> dict:
-    rows = loans_overview(db, group)
-    lent = round(sum(r["outstanding"] for r in rows if r["direction"] == "lent"), 2)
-    borrowed = round(sum(r["outstanding"] for r in rows if r["direction"] == "borrowed"), 2)
-    return {"lent_outstanding": lent, "borrowed_outstanding": borrowed}
+def loan_totals(db: Session, group: Group, asof: date | None = None) -> dict:
+    """Outstanding lent/borrowed. With `asof`, only loans opened before that date and
+    payments made before it are counted (used for as-of net-worth snapshots)."""
+    lent = borrowed = 0.0
+    for ln in db.scalars(select(Loan).where(Loan.group_id == group.id)).all():
+        if asof is not None and ln.opened_on >= asof:
+            continue
+        pay_filter = [LoanPayment.paid_on < asof] if asof is not None else []
+        paid = _sum(db, LoanPayment.amount, LoanPayment.loan_id == ln.id, *pay_filter)
+        out = round(float(ln.principal) - paid, 2)
+        if ln.direction == "lent":
+            lent += out
+        else:
+            borrowed += out
+    return {"lent_outstanding": round(lent, 2), "borrowed_outstanding": round(borrowed, 2)}
+
+
+def networth_asof(db: Session, group: Group, asof: date | None = None) -> float:
+    """Net worth as of a date: assets + investments + lent − card dues − borrowed.
+
+    Investment values aren't tracked over time, so they're treated as constant — which is
+    fine for a *change* over a period (the constant cancels out)."""
+    accounts = db.scalars(select(Account).where(Account.group_id == group.id)).all()
+    assets = cc_owed = 0.0
+    for a in accounts:
+        bal = account_balance(db, a, asof=asof)
+        if a.kind == "credit_card":
+            assets += max(bal, 0.0)
+            cc_owed += max(-bal, 0.0)
+        else:
+            assets += bal
+    invest = investments_value(db, group)
+    lt = loan_totals(db, group, asof=asof)
+    return round(assets + invest + lt["lent_outstanding"] - cc_owed - lt["borrowed_outstanding"], 2)
 
 
 def net_worth(db: Session, group: Group) -> dict:
-    """Household snapshot: cash + investments + money owed to you − money you owe."""
+    """Household snapshot, with assets and what-you-owe reported separately.
+
+    `assets_in_accounts` = money you HAVE: bank + cash + asset accounts (plus any
+    credit-card balance that's actually in credit). `credit_card_owed` = the dues on your
+    cards. `total_owed` = card dues + outstanding borrowed loans.
+    """
     accounts = accounts_overview(db, group)
-    cash = round(sum(a["balance"] for a in accounts), 2)
+    cards = [a for a in accounts if a["kind"] == "credit_card"]
+    others = [a for a in accounts if a["kind"] != "credit_card"]
+    assets_in_accounts = round(
+        sum(a["balance"] for a in others)
+        + sum(a["balance"] for a in cards if a["balance"] > 0), 2)
+    credit_card_owed = round(sum(-a["balance"] for a in cards if a["balance"] < 0), 2)
     invest = round(investments_value(db, group), 2)
     lt = loan_totals(db, group)
-    nw = round(cash + invest + lt["lent_outstanding"] - lt["borrowed_outstanding"], 2)
+    borrowed = lt["borrowed_outstanding"]
+    total_owed = round(credit_card_owed + borrowed, 2)
+    nw = round(assets_in_accounts + invest + lt["lent_outstanding"] - total_owed, 2)
     return {
-        "cash_in_accounts": cash,
+        # net of cards — kept for backward compatibility with older callers
+        "cash_in_accounts": round(assets_in_accounts - credit_card_owed, 2),
+        "assets_in_accounts": assets_in_accounts,          # money you have (no card debt)
+        "credit_card_owed": credit_card_owed,              # dues on credit cards
         "investments_value": invest,
         "lent_outstanding": lt["lent_outstanding"],        # friends owe you (asset)
-        "borrowed_outstanding": lt["borrowed_outstanding"],  # you owe (liability)
+        "borrowed_outstanding": borrowed,                  # loans you owe
+        "total_owed": total_owed,                          # cards + loans
         "net_worth": nw,
         "total_income": income_total(db, group),
         "total_expenses": total(db, group),

@@ -21,3 +21,4 @@ env/
 pytest-cache-files-*/
 .DS_Store
 run-artifacts/
+.mcp.json

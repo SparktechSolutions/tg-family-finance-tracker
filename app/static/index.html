@@ -66,6 +66,8 @@
   button.accent{background:linear-gradient(180deg,var(--primary2),var(--primary)); color:var(--ink); border:none; font-weight:700; box-shadow:0 4px 14px rgba(16,185,129,.28);}
   button.accent:hover{filter:brightness(1.05);}
   button.mini{height:28px; padding:0 11px; font-size:12px; border-radius:8px; line-height:normal;}
+  button.mini.danger{color:#fecdd3; border-color:rgba(244,63,94,.35); background:rgba(244,63,94,.10);}
+  button.mini.danger:hover{background:rgba(244,63,94,.20);}
   label.chk{display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12.5px; height:38px;}
   label.chk input{height:auto;}
   #syncStatus{color:var(--faint); font-size:12.5px;}
@@ -138,6 +140,20 @@
   .modal-actions{display:flex; justify-content:flex-end; gap:10px;}
   @keyframes modalIn{from{opacity:0; transform:translateY(10px) scale(.98);} to{opacity:1; transform:none;}}
 
+  /* Print — show only the report, on white paper */
+  @media print {
+    .sidebar, .topbar, .rep-actions { display:none !important; }
+    main, .content { padding:0 !important; max-width:none !important; }
+    section { display:none !important; }
+    #sec-reports { display:block !important; }
+    body { background:#fff !important; }
+    #sec-reports, #sec-reports * { color:#111 !important; }
+    #sec-reports .card { background:#fff !important; border:1px solid #ccc !important; box-shadow:none !important; }
+    #sec-reports .pill { border:1px solid #ccc !important; color:#444 !important; }
+    #sec-reports .pos { color:#0a7d4f !important; } #sec-reports .neg { color:#b91c1c !important; }
+    #sec-reports th { color:#666 !important; }
+  }
+
   @media (max-width:900px){
     .sidebar{width:66px; padding:12px 8px;} .brand span.t,.nav a .lbl,.side-foot{display:none;}
     .nav a{justify-content:center; padding:11px 0;} .nav a.active::before{display:none;}
@@ -153,12 +169,14 @@
       <a data-sec="overview" class="active"><span class="ic">📊</span><span class="lbl">Overview</span></a>
       <a data-sec="accounts"><span class="ic">🏦</span><span class="lbl">Accounts &amp; assets</span></a>
       <a data-sec="cards"><span class="ic">💳</span><span class="lbl">Credit cards</span></a>
+      <a data-sec="income"><span class="ic">💚</span><span class="lbl">Income &amp; inflow</span></a>
       <a data-sec="loans"><span class="ic">🤝</span><span class="lbl">Loans &amp; transfers</span></a>
       <a data-sec="investments"><span class="ic">📈</span><span class="lbl">Investments</span></a>
       <a data-sec="insurance"><span class="ic">🛡️</span><span class="lbl">Insurance</span></a>
       <a data-sec="budgets"><span class="ic">🎯</span><span class="lbl">Budgets</span></a>
       <a data-sec="recurring"><span class="ic">🔁</span><span class="lbl">Recurring</span></a>
       <a data-sec="expenses"><span class="ic">🧾</span><span class="lbl">Expenses</span></a>
+      <a data-sec="reports"><span class="ic">📑</span><span class="lbl">Reports</span></a>
     </nav>
     <div class="side-foot">
       <span id="syncStatus"><span class="dot"></span> live</span>
@@ -197,15 +215,16 @@
         <div class="card kpi hero"><div class="label">Net worth · now</div><div class="value big" id="networth">—</div></div>
         <div class="card kpi"><div class="label">Opening balance</div><div class="value" id="opening">—</div></div>
         <div class="card kpi"><div class="label">Closing balance</div><div class="value" id="closing">—</div></div>
-        <div class="card kpi"><div class="label">Net change</div><div class="value" id="netchange">—</div></div>
+        <div class="card kpi"><div class="label">Net change · accounts</div><div class="value" id="netchange">—</div><div class="sub" style="margin-top:6px">asset balances only</div></div>
+        <div class="card kpi"><div class="label">Net worth change · period</div><div class="value" id="nwchange">—</div><div class="sub" style="margin-top:6px">incl. cards &amp; loans</div></div>
         <div class="card kpi"><div class="label">Income · period</div><div class="value pos" id="incMtd">—</div></div>
         <div class="card kpi"><div class="label">Expenses · period</div><div class="value neg" id="expMtd">—</div></div>
       </div>
       <div class="cards" style="margin-top:14px">
-        <div class="card kpi"><div class="label">Accounts &amp; assets · now</div><div class="value" id="cash">—</div></div>
+        <div class="card kpi"><div class="label">Accounts &amp; assets · now</div><div class="value" id="cash">—</div><div class="sub" id="cashSub" style="margin-top:6px"></div></div>
         <div class="card kpi"><div class="label">Investments</div><div class="value" id="investVal">—</div></div>
         <div class="card kpi"><div class="label">Owed to you</div><div class="value pos" id="lentVal">—</div></div>
-        <div class="card kpi"><div class="label">You owe</div><div class="value neg" id="oweVal">—</div></div>
+        <div class="card kpi"><div class="label">Total owed · cards + loans</div><div class="value neg" id="oweVal">—</div><div class="sub" id="oweSub" style="margin-top:6px"></div></div>
       </div>
       <div class="grid2">
         <div class="card"><h2>Spending by category</h2><div class="sub">In the selected period</div><canvas id="catChart" height="220"></canvas></div>
@@ -246,6 +265,21 @@
           <input id="cc_owed" placeholder="Owed" type="number" style="max-width:120px">
           <select id="cc_owner" title="Owner"></select>
           <button class="accent" onclick="addAccount('credit_card')">＋ Add card</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- INCOME -->
+    <section id="sec-income">
+      <h1 class="sec-title">💚 Income &amp; cash inflow</h1>
+      <p class="sec-sub">Salary, bonuses, and any money coming in. Credits an account if you pick one.</p>
+      <div class="card">
+        <div id="income"></div>
+        <div class="addrow">
+          <input id="in_amt" placeholder="Amount" type="number" style="max-width:140px">
+          <input id="in_src" placeholder="Source (Salary, Bonus…)">
+          <select id="inc_account" title="Into account (optional)"></select>
+          <button class="accent" onclick="addIncome()">＋ Add income</button>
         </div>
       </div>
     </section>
@@ -341,10 +375,39 @@
       </div>
     </section>
 
+    <!-- REPORTS -->
+    <section id="sec-reports">
+      <h1 class="sec-title" id="repTitle">📑 Finance report <span class="muted" id="repPeriod" style="font-size:13px;font-weight:500"></span></h1>
+      <p class="sec-sub">A summary for the selected period. Use the quick buttons, or the period dropdown at the top (week starts Sunday).</p>
+      <div class="rep-actions" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px">
+        <button onclick="setPeriod('week')">This week</button>
+        <button onclick="setPeriod('month')">This month</button>
+        <button onclick="setPeriod('quarter')">This quarter</button>
+        <button onclick="setPeriod('year')">This year</button>
+        <span style="flex:1"></span>
+        <button class="accent" onclick="printReport()">🖨 Print / Save PDF</button>
+        <button onclick="downloadReportCsv()">⬇ CSV</button>
+      </div>
+      <div id="report"></div>
+    </section>
+
     <!-- EXPENSES -->
     <section id="sec-expenses">
       <h1 class="sec-title">🧾 Expenses</h1>
-      <p class="sec-sub">Everything logged in the selected period.</p>
+      <p class="sec-sub">Add an expense and pick the account it was paid from — a bank balance goes down, a credit card's owed goes up.</p>
+      <div class="card" style="margin-bottom:16px">
+        <h2 style="margin:0 0 4px">Add an expense</h2>
+        <div class="sub">Leave “Source account” empty if it shouldn't affect any balance.</div>
+        <div class="addrow">
+          <input id="ex_amt" placeholder="Amount" type="number" style="max-width:120px">
+          <input id="ex_note" placeholder="Description (e.g. swiggy lunch)">
+          <input id="ex_cat" placeholder="Category (auto)" style="max-width:150px">
+          <select id="ex_account" style="max-width:220px"></select>
+          <input id="ex_date" type="date" style="max-width:160px">
+          <label class="chk"><input id="ex_personal" type="checkbox"> personal</label>
+          <button class="accent" onclick="addExpense()">＋ Add</button>
+        </div>
+      </div>
       <div class="card"><div id="expenses"></div></div>
     </section>
     </div>
@@ -352,7 +415,7 @@
 </div>
 
 <script>
-let currency="", gid=null, members=[], catChart, memChart, timer=null;
+let currency="", gid=null, members=[], catChart, memChart, timer=null, lastSummary=null;
 const $ = id => document.getElementById(id);
 async function j(url, opts){ const r=await fetch(url,opts); if(!r.ok) throw new Error(url+" "+r.status); return r.json(); }
 async function post(url, b){ return j(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}); }
@@ -428,8 +491,20 @@ function drawBar(id, ex, labels, data){ const c=$(id); if(ex) ex.destroy();
 function fillAccountSelects(accts){
   const opts=(accts||[]).map(a=>`<option value="${a.id}">${a.bank_name}${a.last4?' ****'+a.last4:''}</option>`).join("");
   ["tr_from","tr_to"].forEach(id=>{ const e=$(id); const v=e.value; e.innerHTML=opts; if(v)e.value=v; });
-  $("ln_account").innerHTML='<option value="">(no account)</option>'+opts;
+  const opt0='<option value="">(no account)</option>'+opts;
+  $("ln_account").innerHTML=opt0; const ia=$("inc_account"); if(ia){ const v=ia.value; ia.innerHTML=opt0; if(v)ia.value=v; }
+  // Expense source dropdown: label cards vs accounts so the right one is easy to pick.
+  const ex=$("ex_account");
+  if(ex){ const v=ex.value;
+    const exOpts=(accts||[]).map(a=>{const tag=a.kind==="credit_card"?" · card":"";
+      return `<option value="${a.id}">${a.bank_name}${a.last4?' ****'+a.last4:''}${tag}</option>`;}).join("");
+    ex.innerHTML='<option value="">(no account — don\'t change balances)</option>'+exOpts; if(v)ex.value=v; }
 }
+function incomeRows(r){ if(!r||!r.length) return '<div class="empty">No income yet — add one below.</div>';
+  return "<table><tr><th>Date</th><th>Source</th><th>Member</th><th>Account</th><th class='amt'>Amount</th><th class='act'></th></tr>"+
+    r.map(x=>`<tr><td>${x.received_on}</td><td>${x.source}</td><td>${x.member||'—'}</td><td>${x.account||'—'}</td>
+      <td class="amt pos">${money(x.amount)}</td>
+      <td class="act"><button class="mini" onclick="del('incomes',${x.id},'${x.source} income')">✕</button></td></tr>`).join("")+"</table>"; }
 
 function bankRows(a){ const b=a.filter(x=>x.kind!=="credit_card"); if(!b.length) return '<div class="empty">No accounts yet — add one below.</div>';
   return "<table><tr><th>Account</th><th>Owner</th><th class='amt'>Balance</th><th class='act'></th></tr>"+
@@ -441,7 +516,8 @@ function cardRows(a){ const c=a.filter(x=>x.kind==="credit_card"); if(!c.length)
   return "<table><tr><th>Card</th><th>Owner</th><th class='amt'>Owed</th><th class='act'></th></tr>"+
     c.map(x=>{const owed=x.balance<0?-x.balance:0;
     return `<tr><td>${x.bank_name} ****${x.last4}</td><td>${x.owner||'—'}</td><td class="amt ${owed?'neg':''}">${money(owed)}</td>
-      <td class="act"><button class="mini" onclick="editBalance(${x.id},'credit_card',${owed})">Edit</button>
+      <td class="act"><button class="mini accent" onclick="payCard(${x.id},'${x.bank_name} ****${x.last4}',${owed})"${owed?'':' disabled'}>Pay</button>
+      <button class="mini" onclick="editBalance(${x.id},'credit_card',${owed})">Edit</button>
       <button class="mini" onclick="del('accounts',${x.id},'${x.bank_name}')">✕</button></td></tr>`;}).join("")+"</table>"; }
 function investRows(v){ if(!v.length) return '<div class="empty">No investments yet — add one below.</div>';
   return "<table><tr><th>Holding</th><th>Owner</th><th class='amt'>Value</th><th class='amt'>Gain</th><th class='act'></th></tr>"+
@@ -471,11 +547,54 @@ function recurringRows(r){ if(!r.length) return '<div class="empty">No recurring
       <td>${x.day_of_month}</td><td>${x.next_due} <span class="muted">(in ${x.days_until}d)</span></td>
       <td class="act"><button class="mini" onclick="del('recurring',${x.id},'${x.label}')">✕</button></td></tr>`).join("")+"</table>"; }
 
+function renderReport(s){
+  const el=$("report"); if(!el) return;
+  const p=s.period||{}, nw=s.net_worth||{};
+  const inc=p.income||0, exp=p.expenses||0, net=(p.net!=null?p.net:inc-exp);
+  const sav = inc>0 ? (100*net/inc) : 0;
+  const endLabel = p.end ? fmtd(new Date(new Date(p.end).getTime()-86400000)) : "";
+  $("repPeriod").textContent = p.start ? `· ${p.start} → ${endLabel}` : "";
+  const cats=(p.by_category||[]); const catTotal=cats.reduce((a,c)=>a+c.amount,0)||1;
+  const accs=(p.accounts||[]);
+  el.innerHTML=`
+    <div class="cards" style="margin-bottom:14px">
+      <div class="card kpi"><div class="label">Opening balance</div><div class="value">${money(p.opening_balance||0)}</div></div>
+      <div class="card kpi"><div class="label">Income</div><div class="value pos">${money(inc)}</div></div>
+      <div class="card kpi"><div class="label">Expenses</div><div class="value neg">${money(exp)}</div></div>
+      <div class="card kpi"><div class="label">Net change · accounts</div><div class="value">${signed(net)}</div></div>
+      <div class="card kpi"><div class="label">Closing balance</div><div class="value">${money(p.closing_balance||0)}</div></div>
+      <div class="card kpi"><div class="label">Net worth change</div><div class="value">${signed(p.net_worth_change||0)}</div></div>
+      <div class="card kpi"><div class="label">Savings rate</div><div class="value ${sav>=0?'pos':'neg'}">${sav.toFixed(0)}%</div></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>Spending by category</h2>${cats.length?("<table><tr><th>Category</th><th class='amt'>Amount</th><th class='amt'>%</th></tr>"+
+        cats.map(c=>`<tr><td>${c.category}</td><td class="amt">${money(c.amount)}</td><td class="amt muted">${(100*c.amount/catTotal).toFixed(0)}%</td></tr>`).join("")+"</table>"):'<div class="empty">No spending in this period.</div>'}</div>
+      <div class="card"><h2>Spending by person</h2>${(p.by_member||[]).length?("<table><tr><th>Person</th><th class='amt'>Spent</th></tr>"+
+        p.by_member.map(m=>`<tr><td>${m.member}</td><td class="amt">${money(m.amount)}</td></tr>`).join("")+"</table>"):'<div class="empty">—</div>'}</div>
+    </div>
+    <div class="card" style="margin-top:14px"><h2>Accounts — opening → closing</h2>${accs.length?("<table><tr><th>Account</th><th class='amt'>Opening</th><th class='amt'>Closing</th><th class='amt'>Change</th></tr>"+
+      accs.map(a=>`<tr><td>${a.bank_name}${a.last4?' ****'+a.last4:''} ${a.kind!=='bank'?'<span class="pill">'+a.kind+'</span>':''}</td>
+        <td class="amt">${money(a.opening)}</td><td class="amt">${money(a.closing)}</td><td class="amt">${signed(a.change)}</td></tr>`).join("")+"</table>"):'<div class="empty">No accounts.</div>'}</div>`;
+}
+function setPeriod(p){ $("periodSel").value=p; $("customRange").style.display="none"; document.querySelectorAll("#nav a").forEach(x=>x.classList.remove("active")); document.querySelector('#nav a[data-sec="reports"]').classList.add("active"); document.querySelectorAll("main section").forEach(x=>x.classList.remove("active")); $("sec-reports").classList.add("active"); refresh(); }
+function printReport(){ window.print(); }
+function downloadReportCsv(){
+  if(!lastSummary){ toast("Nothing to export yet.","error"); return; }
+  const p=lastSummary.period||{}; const rows=[["Family Finance Report",""],["Period",`${p.start} to ${fmtd(new Date(new Date(p.end).getTime()-86400000))}`],
+    ["Opening balance",p.opening_balance],["Income",p.income],["Expenses",p.expenses],["Net change",p.net_change],["Closing balance",p.closing_balance],
+    [],["Category","Amount"],...(p.by_category||[]).map(c=>[c.category,c.amount]),
+    [],["Person","Spent"],...(p.by_member||[]).map(m=>[m.member,m.amount]),
+    [],["Account","Opening","Closing","Change"],...(p.accounts||[]).map(a=>[`${a.bank_name} ${a.last4||''}`,a.opening,a.closing,a.change])];
+  const csv=rows.map(r=>r.map(v=>`"${(v==null?'':v).toString().replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv"}); const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=`finance-report-${p.start}_to_${p.end}.csv`; a.click();
+}
+
 function fmtd(dt){ return new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); }
 function periodRange(){
   const t=new Date(), y=t.getFullYear(), m=t.getMonth(), d=t.getDate();
   const sel=$("periodSel").value; let start,end,label;
-  if(sel==="week"){ const dow=(t.getDay()+6)%7; start=new Date(y,m,d-dow); end=new Date(y,m,d-dow+7); label="this week"; }
+  if(sel==="week"){ const dow=t.getDay(); start=new Date(y,m,d-dow); end=new Date(y,m,d-dow+7); label="this week (Sun–Sat)"; }
   else if(sel==="quarter"){ const q=Math.floor(m/3)*3; start=new Date(y,q,1); end=new Date(y,q+3,1); label=`Q${q/3+1} ${y}`; }
   else if(sel==="year"){ start=new Date(y,0,1); end=new Date(y+1,0,1); label=`${y}`; }
   else if(sel==="custom"){ start=$("d_start").value?new Date($("d_start").value):new Date(y,m,1);
@@ -488,33 +607,56 @@ function applyCustom(){ refresh(); }
 
 async function refresh(){
   if(gid==null) return;
+  const [ps,pe,plabel]=periodRange();
+  $("periodLabel").textContent="· "+plabel;
+  $("csvLink").href=`/api/expenses.csv?group_id=${gid}`;
+  let ok=true;
+  // Core summary — guarded so a missing field or older server can't blank the page.
   try{
-    const [ps,pe,plabel]=periodRange();
-    $("periodLabel").textContent="· "+plabel;
-    const s=await j(`/api/summary?group_id=${gid}&start=${ps}&end=${pe}`);
-    currency=s.group.currency||""; $("csvLink").href=`/api/expenses.csv?group_id=${gid}`;
-    const nw=s.net_worth, pd=s.period;
-    $("networth").textContent=money(nw.net_worth); $("cash").textContent=money(nw.cash_in_accounts);
+    const s=await j(`/api/summary?group_id=${gid}&start=${ps}&end=${pe}`); lastSummary=s;
+    currency=s.group.currency||"";
+    const nw=s.net_worth||{}, pd=s.period||{};
+    $("networth").textContent=money(nw.net_worth);
+    // "Accounts & assets" = money you have (banks + cash + asset accounts), card debt excluded.
+    $("cash").textContent=money(nw.assets_in_accounts!=null?nw.assets_in_accounts:nw.cash_in_accounts);
+    const ccOwed=nw.credit_card_owed||0;
+    $("cashSub").textContent = ccOwed? `excludes ${money(ccOwed)} card dues` : "";
     $("investVal").textContent=money(nw.investments_value); $("lentVal").textContent=money(nw.lent_outstanding||0);
-    $("oweVal").textContent=money(nw.borrowed_outstanding||0);
-    $("opening").textContent=money(pd.opening_balance); $("closing").textContent=money(pd.closing_balance);
-    $("netchange").innerHTML=signed(pd.net_change);
-    $("incMtd").textContent=money(s.income_this_month); $("expMtd").textContent=money(s.total_this_month);
-    $("banks").innerHTML=bankRows(s.accounts); $("cards").innerHTML=cardRows(s.accounts);
-    $("investments").innerHTML=investRows(s.investments); $("insurance").innerHTML=insuranceRows(s.insurance);
-    $("loans").innerHTML=loanRows(s.loans); $("budgets").innerHTML=budgetRows(s.budgets);
-    $("recurring").innerHTML=recurringRows(s.recurring); fillAccountSelects(s.accounts);
-    catChart=drawBar("catChart",catChart,s.by_category.map(x=>x.category),s.by_category.map(x=>x.amount));
-    memChart=drawBar("memChart",memChart,s.by_member.map(x=>x.member),s.by_member.map(x=>x.amount));
-    $("settle").innerHTML=s.settlements.length? s.settlements.map(x=>`<div style="padding:5px 0">• <b>${x.debtor}</b> → <b>${x.creditor}</b>: ${money(x.amount)}</div>`).join(""):'<div class="empty">Settled up 🎉</div>';
-    const rem=await j(`/api/reminders?group_id=${gid}`);
-    $("reminders").innerHTML = rem.reminders.length? '<div class="reminders">⏰ <b>Due soon</b><br>'+rem.reminders.join("<br>")+'</div>':'';
-    const rows=await j(`/api/expenses?group_id=${gid}&start=${ps}&end=${pe}&limit=300`);
-    const tbl = rows.length? "<table><tr><th>Date</th><th>Category</th><th>Note</th><th>Payer</th><th class='amt'>Amount</th></tr>"+
-      rows.map(r=>`<tr><td>${r.spent_at}</td><td><span class="pill">${r.category}</span>${r.is_refund?' ↩':''}</td><td>${r.note||""}</td><td>${r.payer||'—'}</td><td class="amt">${money(r.amount)}</td></tr>`).join("")+"</table>":'<div class="empty">No expenses in this period.</div>';
-    $("expenses").innerHTML=tbl; $("recent").innerHTML = rows.length? "<table>"+rows.slice(0,12).map(r=>`<tr><td>${r.spent_at}</td><td><span class="pill">${r.category}</span></td><td class="amt">${money(r.amount)}</td></tr>`).join("")+"</table>":'<div class="empty">No expenses in this period.</div>';
-    $("syncStatus").innerHTML=`<span class="dot"></span> ${new Date().toLocaleTimeString()}`;
-  }catch(e){ $("syncStatus").innerHTML='<span class="muted">⚠ offline</span>'; console.error(e); }
+    // "Total owed" = credit-card dues + outstanding borrowed loans.
+    const borrowed=nw.borrowed_outstanding||0;
+    const totalOwed=nw.total_owed!=null?nw.total_owed:(ccOwed+borrowed);
+    $("oweVal").textContent=money(totalOwed);
+    $("oweSub").innerHTML = (ccOwed||borrowed)
+      ? `cards ${money(ccOwed)} · loans ${money(borrowed)}` : "";
+    $("opening").textContent=money(pd.opening_balance||0); $("closing").textContent=money(pd.closing_balance||0);
+    $("netchange").innerHTML=signed(pd.net_change||0);
+    if($("nwchange")) $("nwchange").innerHTML=signed(pd.net_worth_change||0);
+    $("incMtd").textContent=money(s.income_this_month||0); $("expMtd").textContent=money(s.total_this_month||0);
+    $("banks").innerHTML=bankRows(s.accounts||[]); $("cards").innerHTML=cardRows(s.accounts||[]);
+    $("investments").innerHTML=investRows(s.investments||[]); $("insurance").innerHTML=insuranceRows(s.insurance||[]);
+    $("loans").innerHTML=loanRows(s.loans||[]); $("budgets").innerHTML=budgetRows(s.budgets||[]);
+    $("recurring").innerHTML=recurringRows(s.recurring||[]); fillAccountSelects(s.accounts||[]);
+    catChart=drawBar("catChart",catChart,(s.by_category||[]).map(x=>x.category),(s.by_category||[]).map(x=>x.amount));
+    memChart=drawBar("memChart",memChart,(s.by_member||[]).map(x=>x.member),(s.by_member||[]).map(x=>x.amount));
+    $("settle").innerHTML=(s.settlements&&s.settlements.length)? s.settlements.map(x=>`<div style="padding:5px 0">• <b>${x.debtor}</b> → <b>${x.creditor}</b>: ${money(x.amount)}</div>`).join(""):'<div class="empty">Settled up 🎉</div>';
+    renderReport(s);
+  }catch(e){ ok=false; console.error("summary failed:", e);
+    const msg=`<div class="reminders">⚠ <b>Couldn't load data from the server</b> (${e.message}).<br>`+
+      `Your running server is likely out of date. In the dashboard terminal press <b>Ctrl-C</b>, then run `+
+      `<b>./run.sh start</b> again, and reload this page.</div>`;
+    if($("report")) $("report").innerHTML=msg;
+    if($("reminders")) $("reminders").innerHTML=msg;
+  }
+  // Independent fetches — each isolated so one failure never blanks the others.
+  try{ const rem=await j(`/api/reminders?group_id=${gid}`); $("reminders").innerHTML=(rem.reminders&&rem.reminders.length)?'<div class="reminders">⏰ <b>Due soon</b><br>'+rem.reminders.join("<br>")+'</div>':''; }catch(e){}
+  try{ const rows=await j(`/api/expenses?group_id=${gid}&start=${ps}&end=${pe}&limit=300`);
+    $("recent").innerHTML=rows.length? "<table>"+rows.slice(0,12).map(r=>`<tr><td>${r.spent_at}</td><td><span class="pill">${r.category}</span></td><td class="amt">${money(r.amount)}</td></tr>`).join("")+"</table>":'<div class="empty">No expenses in this period.</div>'; }catch(e){}
+  try{ const allRows=await j(`/api/expenses?group_id=${gid}&limit=500`);   // full ledger, always shown
+    $("expenses").innerHTML=allRows.length? "<table><tr><th>Date</th><th>Category</th><th>Note</th><th>Payer</th><th>Source</th><th class='amt'>Amount</th><th></th></tr>"+
+      allRows.map(r=>`<tr><td>${r.spent_at}</td><td><span class="pill">${r.category}</span>${r.is_refund?' ↩':''}</td><td>${r.note||""}</td><td>${r.payer||'—'}</td><td>${r.account||'—'}</td><td class="amt">${money(r.amount)}</td><td class="act"><button class="mini danger" onclick="delExpense(${r.id})">Delete</button></td></tr>`).join("")+"</table>":'<div class="empty">No expenses yet.</div>'; }catch(e){ ok=false; }
+  try{ const inc=await j(`/api/incomes?group_id=${gid}&limit=500`); $("income").innerHTML=incomeRows(inc); }
+  catch(e){ $("income").innerHTML='<div class="empty">Restart the app server to enable the Income view.</div>'; }
+  $("syncStatus").innerHTML = ok? `<span class="dot"></span> ${new Date().toLocaleTimeString()}` : '<span class="muted">⚠ restart the server</span>';
 }
 
 // actions
@@ -533,6 +675,46 @@ async function updateInvest(id,cur){ const v=await uiPrompt("New current value",
 async function addInsurance(){ const n=$("in_name").value.trim(); if(!n){toast("Enter a policy name.","error");return;}
   await post("/api/insurance",{group_id:gid,name:n,kind:$("in_kind").value.trim()||"other",premium:parseFloat($("in_premium").value||"0")||0,due_date:$("in_due").value.trim()||null,frequency:$("in_freq").value});
   ["in_name","in_kind","in_premium","in_due"].forEach(i=>$(i).value=""); toast("Policy added.","success"); refresh(); }
+async function addIncome(){ const a=parseFloat($("in_amt").value||"0")||0; if(!a){toast("Enter an amount.","error");return;}
+  const src=$("in_src").value.trim()||"Income"; const acc=$("inc_account").value;
+  await post("/api/incomes",{group_id:gid,amount:a,source:src,account_id:acc?Number(acc):null});
+  $("in_amt").value="";$("in_src").value=""; toast("Income added.","success"); refresh(); }
+async function addExpense(){ const a=parseFloat($("ex_amt").value||"0")||0; if(!a){toast("Enter an amount.","error");return;}
+  const note=$("ex_note").value.trim(), cat=$("ex_cat").value.trim(), acc=$("ex_account").value, dt=$("ex_date").value;
+  try{
+    const r=await post("/api/expenses",{group_id:gid,amount:a,note,category:cat||null,
+      account_id:acc?Number(acc):null,spent_at:dt||null,shared:!$("ex_personal").checked});
+    ["ex_amt","ex_note","ex_cat","ex_date"].forEach(i=>$(i).value=""); $("ex_personal").checked=false;
+    toast(`Expense added · ${r.category}`+(r.account?` · from ${r.account}`:""),"success"); refresh();
+  }catch(e){ toast("Couldn't add — restart the server if it's out of date.","error"); }
+}
+async function delExpense(id){ if(!await uiConfirm("Delete this expense?",{okText:"Delete"}))return;
+  await j(`/api/expenses/${id}?group_id=${gid}`,{method:"DELETE"}); toast("Deleted.","info"); refresh(); }
+// Pay a credit-card due: reduces the card's owed AND deducts from the chosen source account.
+async function payCard(cardId, label, owed){
+  const accts=(lastSummary&&lastSummary.accounts||[]).filter(a=>a.kind!=="credit_card");
+  if(!accts.length){ toast("Add a bank/cash account first to pay from.","error"); return; }
+  const build=(m,done)=>{
+    const opts=accts.map(a=>`<option value="${a.id}">${a.bank_name}${a.last4?' ****'+a.last4:''} · ${money(a.balance)}</option>`).join("");
+    m.innerHTML=`<h3 style="margin:0 0 4px">Pay ${label}</h3>
+      <div class="sub" style="margin-bottom:12px">Reduces this card's owed and deducts from the account you pay from.</div>
+      <label class="fld">Amount<input id="pc_amt" type="number" value="${owed||""}" style="width:100%"></label>
+      <label class="fld" style="margin-top:10px">Pay from<select id="pc_src" style="width:100%">${opts}</select></label>
+      <div class="modal-actions" style="margin-top:16px">
+        <button data-cancel>Cancel</button>
+        <button class="accent" data-ok>Pay</button></div>`;
+    m.querySelector("[data-cancel]").onclick=()=>done(null);
+    m.querySelector("[data-ok]").onclick=()=>done({amt:parseFloat(m.querySelector("#pc_amt").value||"0")||0, src:m.querySelector("#pc_src").value});
+  };
+  build.cancelValue=null;
+  const res=await _modal(build);
+  if(!res)return;
+  if(res.amt<=0){ toast("Enter an amount greater than 0.","error"); return; }
+  try{
+    await post("/api/transfers",{group_id:gid,from_account_id:Number(res.src),to_account_id:cardId,amount:res.amt});
+    toast(`Paid ${money(res.amt)} to ${label}.`,"success"); refresh();
+  }catch(e){ toast("Couldn't record the payment — restart the server if it's out of date.","error"); }
+}
 async function addLoan(){ const w=$("ln_who").value.trim(); if(!w){toast("Enter a name.","error");return;} const a=parseFloat($("ln_amt").value||"0")||0; if(!a){toast("Enter an amount.","error");return;}
   const acc=$("ln_account").value; await post("/api/loans",{group_id:gid,direction:$("ln_dir").value,counterparty:w,principal:a,account_id:acc?Number(acc):null});
   $("ln_who").value="";$("ln_amt").value=""; toast("Loan recorded.","success"); refresh(); }

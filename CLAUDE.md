@@ -39,8 +39,12 @@ Insurance: /insurance add health 24000 2026-09-15 HDFC Ergo Family
            /due
 Reports:   /total · /total <cat> · /month june · /split · /networth · /undo · /help
 ```
-Account hints (`>token`) match a bank by name or by last-4. Amounts accept `₹ $ € £`,
-commas, and decimals.
+Account hints (`>token`) match a bank by name or by last-4. The source account can also be
+named in **plain English** (no `>` needed): `food swiggy 2002 hsbc card` debits the HSBC
+credit card; `lunch 250 from sbi 8656` debits SBI ****8656. A `card`/`credit` cue prefers a
+credit card when a bank and card share a name; an explicit last-4 always wins. Resolution
+lives in `crud.find_account_in_text`, wired into expenses, refunds, and `/income`.
+Amounts accept `₹ $ € £`, commas, and decimals.
 
 What's left for production hardening (not yet done):
 - Confirm the live webhook **group-id payload shape** and fix `whatsapp._group_id_of`.

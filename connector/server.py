@@ -212,9 +212,37 @@ def recent_expenses(limit: int = 20) -> dict:
 
 def main() -> None:
     # Ensure tables exist before serving (dev convenience; use Alembic in production).
+    import os
     from app.db import init_db
     init_db()
-    mcp.run()  # stdio transport
+
+    # Transport is chosen by env so the SAME server works two ways:
+    #   • stdio (default) — for clients that launch a local command.
+    #   • sse / streamable-http — exposes a URL for clients that only accept a
+    #     "Remote MCP server URL" (e.g. Cowork's Add-custom-connector dialog).
+    transport = os.environ.get("FINANCE_MCP_TRANSPORT", "stdio").lower()
+    if transport in ("sse", "http", "streamable-http", "streamable_http"):
+        mcp.settings.host = os.environ.get("FINANCE_MCP_HOST", "127.0.0.1")
+        mcp.settings.port = int(os.environ.get("FINANCE_MCP_PORT", "8765"))
+        kind = "streamable-http" if transport.startswith("stream") or transport == "http" else "sse"
+        # Optional secret token, embedded in the URL path so an unguessable prefix gates
+        # every route (works even when the client only accepts a bare URL — no header field
+        # needed). Without the token in the path the server simply 404s.
+        token = (os.environ.get("FINANCE_MCP_TOKEN") or "").strip().strip("/")
+        prefix = f"/{token}" if token else ""
+        if kind == "streamable-http":
+            mcp.settings.streamable_http_path = f"{prefix}/mcp"
+            path = mcp.settings.streamable_http_path
+        else:
+            mcp.settings.sse_path = f"{prefix}/sse"
+            mcp.settings.message_path = f"{prefix}/messages/"
+            path = mcp.settings.sse_path
+        print(f"Family Finance MCP serving over {kind} at "
+              f"http://{mcp.settings.host}:{mcp.settings.port}{path}"
+              + ("  (secret token required in path)" if token else ""))
+        mcp.run(transport=kind)
+    else:
+        mcp.run()  # stdio transport
 
 
 if __name__ == "__main__":

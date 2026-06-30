@@ -50,7 +50,13 @@ def handle_text(db: Session, group: Group, member: Member, text: str, *,
         payer = crud.find_member_by_name(db, group, parsed.payer_hint) or \
             crud.get_or_create_member(db, group, parsed.payer_hint, display_name=parsed.payer_hint)
 
-    account = crud.find_account(db, group, parsed.account_hint) if parsed.account_hint else None
+    # Resolve the source account to debit. Prefer an explicit '>hint'; otherwise fall back
+    # to an account named in plain English ("... hsbc card", "... from sbi 8656").
+    account = crud.find_account(db, group, parsed.account_hint) \
+        if parsed.account_hint else None
+    if account is None:
+        account = crud.find_account_in_text(db, group, text, member=payer,
+                                             skip_amount=parsed.amount)
 
     exp = crud.create_expense(
         db, group=group, member=payer, account=account, amount=parsed.amount,

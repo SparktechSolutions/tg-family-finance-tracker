@@ -144,6 +144,30 @@ JSON
   info "Point DATABASE_URL at the same DB as the web app to share one ledger."
 }
 
+cmd_connector_serve() {
+  # Run the connector as a local HTTP (SSE) MCP server so clients that only accept a
+  # "Remote MCP server URL" (e.g. Cowork's Add-custom-connector dialog) can use it.
+  ensure_python
+  if [ ! -d "$VENV_CONNECTOR" ]; then
+    info "Creating connector virtualenv ($VENV_CONNECTOR)…"
+    "$PY" -m venv "$VENV_CONNECTOR"
+    "$SCRIPT_DIR/$VENV_CONNECTOR/bin/python" -m pip install --quiet --upgrade pip
+    "$SCRIPT_DIR/$VENV_CONNECTOR/bin/python" -m pip install --quiet -r connector/requirements.txt
+  fi
+  export DATABASE_URL="${DATABASE_URL:-sqlite:///$SCRIPT_DIR/expenses.db}"
+  export FINANCE_GROUP_ID="${FINANCE_GROUP_ID:-cowork-household}"
+  export FINANCE_MEMBER="${FINANCE_MEMBER:-You}"
+  export FINANCE_MCP_TRANSPORT="${FINANCE_MCP_TRANSPORT:-sse}"
+  export FINANCE_MCP_HOST="${FINANCE_MCP_HOST:-127.0.0.1}"
+  export FINANCE_MCP_PORT="${FINANCE_MCP_PORT:-8765}"
+  ok "Serving the Family Finance connector over HTTP."
+  info "In Cowork → Add custom connector, paste this Remote MCP server URL:"
+  printf "\n    http://localhost:%s/sse\n\n" "$FINANCE_MCP_PORT"
+  info "Sharing DB: $DATABASE_URL  ·  household: $FINANCE_GROUP_ID"
+  info "Keep this terminal open while you use the connector. Ctrl-C to stop."
+  exec "$SCRIPT_DIR/$VENV_CONNECTOR/bin/python" -m connector.server
+}
+
 cmd_clean() {
   rm -rf "$VENV" "$VENV_CONNECTOR"
   ok "Removed virtualenvs."
@@ -158,6 +182,7 @@ case "${1:-all}" in
   start|run)  cmd_start ;;
   test)       cmd_test ;;
   connector)  cmd_connector ;;
+  connector-serve|serve-connector) cmd_connector_serve ;;
   telegram)   cmd_telegram ;;
   import)     shift; cmd_import "$@" ;;
   doctor)     cmd_doctor ;;

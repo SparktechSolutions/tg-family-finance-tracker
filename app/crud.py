@@ -1,6 +1,7 @@
 """Persistence helpers. Pure DB logic, no FastAPI/HTTP here so it's easy to test."""
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from sqlalchemy import func, or_, select
@@ -175,6 +176,17 @@ def delete_last_expense(db: Session, group: Group, member: Member) -> Expense | 
     return exp
 
 
+def delete_expense(db: Session, group: Group, expense_id: int) -> bool:
+    """Delete a single expense/refund by id (used by the dashboard ledger)."""
+    exp = db.scalar(
+        select(Expense).where(Expense.group_id == group.id, Expense.id == expense_id))
+    if exp is None:
+        return False
+    db.delete(exp)
+    db.flush()
+    return True
+
+
 # --- accounts ------------------------------------------------------------------
 
 def add_account(db: Session, group: Group, member: Member, *, bank_name: str,
@@ -204,6 +216,83 @@ def find_account(db: Session, group: Group, token: str,
     if member is not None:
         q = q.where(Account.member_id == member.id)
     return db.scalar(q.order_by(Account.id))
+
+
+# Generic words inside a bank name that are too common to match on their own.
+_BANK_STOPWORDS = {
+    "bank", "savings", "saving", "account", "acct", "post", "office", "the", "of",
+    "card", "credit", "debit", "co", "ltd", "limited", "and", "yes",
+}
+# Words in a message that hint the source is a credit card.
+_CARD_HINT_RE = re.compile(r"\b(?:credit\s*card|cc|card)\b", re.IGNORECASE)
+# Words that hint the source is a regular (non-card) account.
+_BANK_HINT_RE = re.compile(r"\b(?:bank|savings|debit|account|a/c|upi)\b", re.IGNORECASE)
+
+
+def find_account_in_text(db: Session, group: Group, text: str,
+                         member: Member | None = None,
+                         skip_amount: float | None = None) -> Account | None:
+    """Resolve a source account named in *plain* text (no '>' needed).
+
+    Matches an account by its last-4 (a standalone 4-digit token) or by its bank name
+    appearing in the message. When several accounts match (e.g. an 'HDFC' bank and an
+    'HDFC' credit card), a 'card'/'credit' hint in the text prefers the credit card and a
+    'bank'/'savings' hint prefers the deposit account. Returns the best match or None.
+
+    Used so "food swiggy 2002 hsbc card" debits the HSBC credit card, exactly like
+    "food swiggy 2002 >hsbc" would.
+    """
+    if not text:
+        return None
+    low = text.lower()
+    accounts = db.scalars(select(Account).where(Account.group_id == group.id)).all()
+
+    # 1. Exact last-4 match wins (it's unique, and explicit). Match group-wide — a named
+    #    last-4 should resolve even if the account belongs to another family member.
+    #    Ignore the 4-digit form of the amount so e.g. "...2002..." isn't read as a last-4.
+    amount_tok = str(int(skip_amount)) if skip_amount and float(skip_amount).is_integer() else None
+    four_digit = set(re.findall(r"\b\d{4}\b", low))
+    four_digit.discard(amount_tok)
+    for a in accounts:
+        if a.last4 and a.last4 in four_digit:
+            return a
+
+    # 2. Name match: the full bank name, or a distinctive (non-stopword) token of it,
+    #    appears as a whole word in the message.
+    matches: list[Account] = []
+    for a in accounts:
+        name = (a.bank_name or "").lower().strip()
+        if not name:
+            continue
+        terms = {name}
+        terms.update(t for t in re.split(r"\s+", name)
+                     if len(t) >= 3 and t not in _BANK_STOPWORDS)
+        if any(re.search(rf"\b{re.escape(t)}\b", low) for t in terms):
+            matches.append(a)
+
+    if not matches:
+        return None
+
+    # Prefer the spender's own accounts when a name is shared across members.
+    if member is not None:
+        own = [a for a in matches if a.member_id == member.id]
+        if own:
+            matches = own
+    if len(matches) == 1:
+        return matches[0]
+
+    # 3. Disambiguate by an explicit card/bank hint, else fall back deterministically.
+    wants_card = bool(_CARD_HINT_RE.search(text))
+    wants_bank = bool(_BANK_HINT_RE.search(text)) and not wants_card
+    if wants_card:
+        cards = [a for a in matches if a.kind == "credit_card"]
+        if cards:
+            return sorted(cards, key=lambda a: a.id)[0]
+    if wants_bank:
+        banks = [a for a in matches if a.kind != "credit_card"]
+        if banks:
+            return sorted(banks, key=lambda a: a.id)[0]
+    return sorted(matches, key=lambda a: a.id)[0]
 
 
 def set_account_balance(db: Session, account: Account, target_balance: float) -> Account:
@@ -240,6 +329,38 @@ def create_income(db: Session, *, group: Group, member: Member | None,
     db.add(inc)
     db.flush()
     return inc
+
+
+def list_incomes(db: Session, group: Group, *, start: date | None = None,
+                 end: date | None = None, limit: int = 300) -> list[dict]:
+    q = (select(Income, Member, Account)
+         .join(Member, Member.id == Income.member_id, isouter=True)
+         .join(Account, Account.id == Income.account_id, isouter=True)
+         .where(Income.group_id == group.id)
+         .order_by(Income.received_on.desc(), Income.id.desc()).limit(limit))
+    if start:
+        q = q.where(Income.received_on >= start)
+    if end:
+        q = q.where(Income.received_on < end)
+    out = []
+    for inc, mem, acc in db.execute(q).all():
+        out.append({
+            "id": inc.id, "amount": float(inc.amount), "currency": inc.currency,
+            "source": inc.source, "note": inc.note,
+            "received_on": inc.received_on.isoformat(),
+            "member": (mem.display_name or mem.wa_user_id) if mem else None,
+            "account": (f"{acc.bank_name} ****{acc.last4}" if acc else None),
+        })
+    return out
+
+
+def delete_income(db: Session, group: Group, income_id: int) -> bool:
+    inc = db.scalar(select(Income).where(Income.group_id == group.id, Income.id == income_id))
+    if inc is None:
+        return False
+    db.delete(inc)
+    db.flush()
+    return True
 
 
 # --- investments ---------------------------------------------------------------

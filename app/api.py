@@ -245,6 +245,45 @@ def delete_insurance(ins_id: int, db: Session = Depends(get_session)):
     return {"ok": True}
 
 
+# --- management: income (cash inflow) -----------------------------------------
+
+class IncomeIn(BaseModel):
+    group_id: int | None = None
+    member_id: int | None = None
+    amount: float
+    source: str = "Income"
+    account_id: int | None = None
+
+
+@router.get("/incomes")
+def incomes(group_id: int | None = None, start: str | None = None, end: str | None = None,
+            limit: int = Query(300, le=1000), db: Session = Depends(get_session)):
+    g = _get_group(db, group_id, None)
+    return crud.list_incomes(db, g, start=_parse_d(start), end=_parse_d(end), limit=limit)
+
+
+@router.post("/incomes")
+def add_income(body: IncomeIn, db: Session = Depends(get_session)):
+    g = _get_group(db, body.group_id, None)
+    acc = db.get(Account, body.account_id) if body.account_id else None
+    import uuid as _uuid
+    inc = crud.create_income(
+        db, group=g, member=_default_member(db, g, body.member_id), account=acc,
+        amount=body.amount, currency=g.currency, source=body.source.capitalize(),
+        note=body.source, received_on=date.today(),
+        raw_message=f"income {body.amount} {body.source}", wa_message_id=f"dash-inc-{_uuid.uuid4()}")
+    db.commit()
+    return {"id": inc.id if inc else None, "ok": inc is not None}
+
+
+@router.delete("/incomes/{income_id}")
+def delete_income(income_id: int, group_id: int | None = None, db: Session = Depends(get_session)):
+    g = _get_group(db, group_id, None)
+    ok = crud.delete_income(db, g, income_id)
+    db.commit()
+    return {"ok": ok}
+
+
 # --- management: transfers & loans --------------------------------------------
 
 class TransferIn(BaseModel):
@@ -413,6 +452,54 @@ async def import_chat(request: Request, wa_group_id: str, currency: str = "INR",
             "duplicates": res.duplicates, "skipped": res.skipped, "messages": res.lines}
 
 
+class ExpenseIn(BaseModel):
+    group_id: int | None = None
+    member_id: int | None = None       # payer; defaults to the group's first member
+    amount: float
+    note: str = ""                     # free-text description
+    category: str | None = None        # None/"Auto" -> inferred from the note
+    account_id: int | None = None      # source to debit (bank balance down / card owed up)
+    spent_at: str | None = None        # ISO date; defaults to today
+    shared: bool = True                # False = personal (excluded from settle-up)
+
+
+@router.post("/expenses")
+def add_expense(body: ExpenseIn, db: Session = Depends(get_session)):
+    """Log an expense from the dashboard, debiting an optional source account."""
+    g = _get_group(db, body.group_id, None)
+    if not body.amount or body.amount <= 0:
+        raise HTTPException(400, "amount must be greater than 0")
+    acc = db.get(Account, body.account_id) if body.account_id else None
+    if body.account_id and acc is None:
+        raise HTTPException(404, "account not found")
+    note = (body.note or "").strip()
+    # Infer the category from the description unless one was explicitly chosen.
+    cat = (body.category or "").strip()
+    if not cat or cat.lower() == "auto":
+        from .parser import _infer_category
+        cat = _infer_category(note, None)
+    import uuid as _uuid
+    exp = crud.create_expense(
+        db, group=g, member=_default_member(db, g, body.member_id), account=acc,
+        amount=float(body.amount), currency=g.currency, category=cat,
+        note=note or cat, spent_at=_parse_d(body.spent_at) or date.today(),
+        raw_message=note or f"{cat} {body.amount}",
+        wa_message_id=f"dash-exp-{_uuid.uuid4()}", shared=body.shared)
+    db.commit()
+    return {"id": exp.id if exp else None, "ok": exp is not None,
+            "category": cat,
+            "account": (f"{acc.bank_name} ****{acc.last4}" if acc else None)}
+
+
+@router.delete("/expenses/{expense_id}")
+def remove_expense(expense_id: int, group_id: int | None = None,
+                   db: Session = Depends(get_session)):
+    g = _get_group(db, group_id, None)
+    ok = crud.delete_expense(db, g, expense_id)
+    db.commit()
+    return {"ok": ok}
+
+
 @router.get("/expenses")
 def list_expenses(
     group_id: int | None = None,
@@ -424,8 +511,9 @@ def list_expenses(
 ):
     g = _get_group(db, group_id, None)
     q = (
-        select(Expense, Member)
+        select(Expense, Member, Account)
         .join(Member, Member.id == Expense.member_id, isouter=True)
+        .join(Account, Account.id == Expense.account_id, isouter=True)
         .where(Expense.group_id == g.id)
         .order_by(Expense.spent_at.desc(), Expense.id.desc())
         .limit(limit)
@@ -437,7 +525,7 @@ def list_expenses(
     if end:
         q = q.where(Expense.spent_at < _parse_d(end))
     out = []
-    for exp, mem in db.execute(q).all():
+    for exp, mem, acc in db.execute(q).all():
         out.append({
             "id": exp.id,
             "amount": float(exp.amount),
@@ -445,6 +533,8 @@ def list_expenses(
             "category": exp.category,
             "note": exp.note,
             "payer": (mem.display_name or mem.wa_user_id) if mem else None,
+            "account": (f"{acc.bank_name} ****{acc.last4}" if acc else None),
+            "account_id": exp.account_id,
             "spent_at": exp.spent_at.isoformat(),
             "is_refund": bool(exp.is_refund),
         })
