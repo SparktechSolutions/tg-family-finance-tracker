@@ -63,6 +63,40 @@ def by_category(db: Session, group: Group, *, start: date | None = None,
     return [(c, float(s)) for c, s in db.execute(q).all()]
 
 
+def by_source(db: Session, group: Group, *, start: date | None = None,
+              end: date | None = None) -> list[dict]:
+    """Spending grouped by the account/card it was paid from — 'where we spent'.
+
+    Returns one row per source: {source, kind, amount}. Credit-card purchases and
+    account/cash purchases are naturally separated by `kind`. Refunds net out (negative
+    amounts) so each source shows true net spend. Expenses with no source fall under
+    'Unassigned'.
+    """
+    q = (
+        select(Expense.account_id, func.sum(Expense.amount))
+        .where(Expense.group_id == group.id)
+        .group_by(Expense.account_id)
+    )
+    if start:
+        q = q.where(Expense.spent_at >= start)
+    if end:
+        q = q.where(Expense.spent_at < end)
+    out = []
+    for account_id, total_amt in db.execute(q).all():
+        amt = float(total_amt or 0)
+        if account_id is None:
+            out.append({"source": "Unassigned", "kind": "none", "amount": amt})
+            continue
+        acc = db.get(Account, account_id)
+        if acc is None:
+            out.append({"source": "Unassigned", "kind": "none", "amount": amt})
+        else:
+            label = f"{acc.bank_name}" + (f" ****{acc.last4}" if acc.last4 else "")
+            out.append({"source": label, "kind": acc.kind, "amount": amt})
+    out.sort(key=lambda r: r["amount"], reverse=True)
+    return out
+
+
 def by_member(db: Session, group: Group, *, start: date | None = None,
               end: date | None = None, shared_only: bool = False) -> list[tuple[str, float]]:
     q = (
@@ -253,8 +287,9 @@ def upcoming_premiums(db: Session, group: Group) -> list[dict]:
     return out
 
 
-def loan_outstanding(db: Session, loan: Loan) -> float:
-    paid = _sum(db, LoanPayment.amount, LoanPayment.loan_id == loan.id)
+def loan_outstanding(db: Session, loan: Loan, asof: date | None = None) -> float:
+    pay_filter = [LoanPayment.paid_on < asof] if asof is not None else []
+    paid = _sum(db, LoanPayment.amount, LoanPayment.loan_id == loan.id, *pay_filter)
     return round(float(loan.principal) - paid, 2)
 
 
@@ -285,9 +320,7 @@ def loan_totals(db: Session, group: Group, asof: date | None = None) -> dict:
     for ln in db.scalars(select(Loan).where(Loan.group_id == group.id)).all():
         if asof is not None and ln.opened_on >= asof:
             continue
-        pay_filter = [LoanPayment.paid_on < asof] if asof is not None else []
-        paid = _sum(db, LoanPayment.amount, LoanPayment.loan_id == ln.id, *pay_filter)
-        out = round(float(ln.principal) - paid, 2)
+        out = loan_outstanding(db, ln, asof=asof)
         if ln.direction == "lent":
             lent += out
         else:

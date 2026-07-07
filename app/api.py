@@ -62,6 +62,7 @@ def summary(group_id: int | None = None, start: str | None = None, end: str | No
         "net_worth": nw,
         "by_category": period["by_category"],
         "by_member": period["by_member"],
+        "by_source": reports.by_source(db, g, start=p_start, end=p_end),
         "accounts": reports.accounts_overview(db, g),
         "investments": reports.investments_overview(db, g),
         "insurance": reports.upcoming_premiums(db, g),
@@ -489,6 +490,29 @@ def add_expense(body: ExpenseIn, db: Session = Depends(get_session)):
     return {"id": exp.id if exp else None, "ok": exp is not None,
             "category": cat,
             "account": (f"{acc.bank_name} ****{acc.last4}" if acc else None)}
+
+
+@router.get("/transfers")
+def list_transfers(group_id: int | None = None, limit: int = Query(200, le=1000),
+                   db: Session = Depends(get_session)):
+    from .models import Transfer
+    g = _get_group(db, group_id, None)
+    A2 = Account
+    rows = db.execute(
+        select(Transfer).where(Transfer.group_id == g.id)
+        .order_by(Transfer.transferred_on.desc(), Transfer.id.desc()).limit(limit)
+    ).scalars().all()
+    out = []
+    for t in rows:
+        src = db.get(Account, t.from_account_id)
+        dst = db.get(Account, t.to_account_id)
+        out.append({
+            "id": t.id, "amount": float(t.amount), "currency": t.currency,
+            "date": t.transferred_on.isoformat(), "note": t.note,
+            "from": (f"{src.bank_name} ****{src.last4}" if src else "—"),
+            "to": (f"{dst.bank_name} ****{dst.last4}" if dst else "—"),
+        })
+    return out
 
 
 @router.delete("/expenses/{expense_id}")

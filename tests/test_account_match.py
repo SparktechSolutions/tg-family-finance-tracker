@@ -74,6 +74,35 @@ def test_explicit_arrow_still_wins(db):
     assert reports.account_balance(db, bank) == 800
 
 
+def test_by_source_separates_card_and_account_no_double_count(db):
+    from datetime import date as _date
+    from app import reports
+    g, m = _group(db)
+    bank = crud.add_account(db, g, m, bank_name="DCB", last4="2289", kind="bank",
+                            opening_balance=10000)
+    card = crud.add_account(db, g, m, bank_name="HSBC", last4="7893", kind="credit_card")
+
+    # Two purchases: one on the card, one on the bank.
+    ingest.handle_text(db, g, m, "groceries 1000 hsbc card", message_id="s1")
+    ingest.handle_text(db, g, m, "fuel 500 dcb 2289", message_id="s2")
+
+    # Pay part of the card bill — a settlement transfer, NOT new spending.
+    crud.create_transfer(db, group=g, member=m, from_account=bank, to_account=card,
+                         amount=800, currency="INR", on=_date.today(),
+                         note="card payment")
+
+    # Spending is counted once (purchases only) — the payment is not double-counted.
+    assert reports.total(db, g) == 1500
+
+    src = {r["source"]: r for r in reports.by_source(db, g)}
+    assert src["HSBC ****7893"]["kind"] == "credit_card" and src["HSBC ****7893"]["amount"] == 1000
+    assert src["DCB ****2289"]["amount"] == 500
+
+    # Balances still tally: card owed 1000 − 800 paid = 200; bank 10000 − 500 − 800 = 8700.
+    assert reports.account_balance(db, card) == -200
+    assert reports.account_balance(db, bank) == 8700
+
+
 def test_paycard_reduces_owed_and_source(db):
     g, m = _group(db)
     bank = crud.add_account(db, g, m, bank_name="DCB", last4="2289", kind="bank",

@@ -231,6 +231,7 @@
         <div class="card"><h2>Spending by person</h2><div class="sub">In the selected period</div><canvas id="memChart" height="220"></canvas></div>
       </div>
       <div class="grid2">
+        <div class="card"><h2>💳 Spending by source</h2><div class="sub">Where you spent — credit cards vs accounts</div><div id="bySource"></div></div>
         <div class="card"><h2>💰 Settle up</h2><div class="sub">Who owes whom (shared expenses)</div><div id="settle"></div></div>
         <div class="card"><h2>Recent expenses</h2><div class="sub">Latest in this period</div><div id="recent"></div></div>
       </div>
@@ -308,6 +309,10 @@
           <button class="accent" onclick="addTransfer()">Transfer</button>
         </div>
         <div class="sub" id="tr_msg" style="margin-top:8px"></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2>🔁 All transfers</h2><div class="sub">Money moved between your accounts, incl. credit-card bill payments. These settle balances — they aren't counted as spending.</div>
+        <div id="transfers"></div>
       </div>
     </section>
 
@@ -529,6 +534,18 @@ function insuranceRows(r){ if(!r.length) return '<div class="empty">No policies 
     r.map(p=>{let due="—";if(p.due_date){const d=p.days_until_due,cls=d<0?"neg":(d<=30?"warn":""),lbl=d<0?"overdue":`in ${d}d`;due=`<span class="${cls}">${p.due_date} (${lbl})</span>`;}
     return `<tr><td>${p.name} <span class="pill">${p.kind}</span></td><td>${p.owner||'—'}</td><td class="amt">${money(p.premium)}/${p.frequency}</td>
       <td>${due}</td><td class="act"><button class="mini" onclick="del('insurance',${p.id},'${p.name}')">✕</button></td></tr>`;}).join("")+"</table>"; }
+function sourceRows(rows){ const a=(rows||[]).filter(x=>Math.abs(x.amount)>0.005);
+  if(!a.length) return '<div class="empty">No spending in this period.</div>';
+  const cards=a.filter(x=>x.kind==="credit_card"), other=a.filter(x=>x.kind!=="credit_card");
+  const sum=list=>list.reduce((t,x)=>t+x.amount,0);
+  const row=x=>`<tr><td>${x.kind==="credit_card"?"💳":(x.kind==="cash"?"💵":(x.kind==="none"?"❔":"🏦"))} ${x.source}</td><td class="amt">${money(x.amount)}</td></tr>`;
+  let html="<table><tr><th>Source</th><th class='amt'>Spent</th></tr>";
+  if(cards.length){ html+=`<tr><td colspan="2" class="muted" style="padding-top:8px"><b>Credit cards</b> · ${money(sum(cards))}</td></tr>`+cards.map(row).join(""); }
+  if(other.length){ html+=`<tr><td colspan="2" class="muted" style="padding-top:8px"><b>Accounts &amp; cash</b> · ${money(sum(other))}</td></tr>`+other.map(row).join(""); }
+  return html+"</table>"; }
+function transferRows(t){ if(!(t||[]).length) return '<div class="empty">No transfers yet.</div>';
+  return "<table><tr><th>Date</th><th>From</th><th>To</th><th>Note</th><th class='amt'>Amount</th></tr>"+
+    t.map(x=>`<tr><td>${x.date}</td><td>${x.from}</td><td>${x.to}</td><td>${x.note||"—"}</td><td class="amt">${money(x.amount)}</td></tr>`).join("")+"</table>"; }
 function loanRows(l){ const a=(l||[]).filter(x=>x.outstanding>0.005); if(!a.length) return '<div class="empty">No outstanding loans.</div>';
   return "<table><tr><th>Who</th><th></th><th class='amt'>Outstanding</th><th class='act'></th></tr>"+
     a.map(x=>`<tr><td>${x.counterparty}</td><td>${x.direction==='lent'?'owes you':'you owe'}</td>
@@ -639,6 +656,7 @@ async function refresh(){
     catChart=drawBar("catChart",catChart,(s.by_category||[]).map(x=>x.category),(s.by_category||[]).map(x=>x.amount));
     memChart=drawBar("memChart",memChart,(s.by_member||[]).map(x=>x.member),(s.by_member||[]).map(x=>x.amount));
     $("settle").innerHTML=(s.settlements&&s.settlements.length)? s.settlements.map(x=>`<div style="padding:5px 0">• <b>${x.debtor}</b> → <b>${x.creditor}</b>: ${money(x.amount)}</div>`).join(""):'<div class="empty">Settled up 🎉</div>';
+    if($("bySource")) $("bySource").innerHTML=sourceRows(s.by_source||[]);
     renderReport(s);
   }catch(e){ ok=false; console.error("summary failed:", e);
     const msg=`<div class="reminders">⚠ <b>Couldn't load data from the server</b> (${e.message}).<br>`+
@@ -656,6 +674,8 @@ async function refresh(){
       allRows.map(r=>`<tr><td>${r.spent_at}</td><td><span class="pill">${r.category}</span>${r.is_refund?' ↩':''}</td><td>${r.note||""}</td><td>${r.payer||'—'}</td><td>${r.account||'—'}</td><td class="amt">${money(r.amount)}</td><td class="act"><button class="mini danger" onclick="delExpense(${r.id})">Delete</button></td></tr>`).join("")+"</table>":'<div class="empty">No expenses yet.</div>'; }catch(e){ ok=false; }
   try{ const inc=await j(`/api/incomes?group_id=${gid}&limit=500`); $("income").innerHTML=incomeRows(inc); }
   catch(e){ $("income").innerHTML='<div class="empty">Restart the app server to enable the Income view.</div>'; }
+  try{ const tr=await j(`/api/transfers?group_id=${gid}&limit=300`); if($("transfers")) $("transfers").innerHTML=transferRows(tr); }
+  catch(e){ if($("transfers")) $("transfers").innerHTML='<div class="empty">Restart the app server to enable the Transfers view.</div>'; }
   $("syncStatus").innerHTML = ok? `<span class="dot"></span> ${new Date().toLocaleTimeString()}` : '<span class="muted">⚠ restart the server</span>';
 }
 
